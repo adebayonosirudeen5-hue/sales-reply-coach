@@ -34,3 +34,9 @@
 - [x] Loading states and error handling
 - [x] Mobile responsive design
 - [x] Toast notifications for actions
+
+## New Features (v2)
+
+- [x] Friend/Expert Mode toggle in conversation coach
+- [x] "What I Learned" summary for knowledge base items
+- [x] Conversation buyer/prospect tagging

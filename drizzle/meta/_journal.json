@@ -15,6 +15,13 @@
       "when": 1770209549617,
       "tag": "0001_lowly_outlaw_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1770210980499,
+      "tag": "0002_certain_korvac",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import {
   Brain,
@@ -18,7 +20,13 @@ import {
   Clock,
   AlertCircle,
   RefreshCw,
-  Link as LinkIcon
+  Link as LinkIcon,
+  ChevronDown,
+  Lightbulb,
+  MessageCircle,
+  Sparkles,
+  Heart,
+  Briefcase
 } from "lucide-react";
 
 export default function KnowledgeBase() {
@@ -28,6 +36,7 @@ export default function KnowledgeBase() {
   const [videoUrl, setVideoUrl] = useState("");
   const [pdfTitle, setPdfTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const utils = trpc.useUtils();
@@ -60,13 +69,23 @@ export default function KnowledgeBase() {
   });
 
   const processItem = trpc.knowledgeBase.processItem.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success("Content processed successfully!");
       utils.knowledgeBase.list.invalidate();
     },
     onError: (error) => {
       toast.error("Failed to process: " + error.message);
       utils.knowledgeBase.list.invalidate();
+    },
+  });
+
+  const setBrainType = trpc.knowledgeBase.setBrainType.useMutation({
+    onSuccess: () => {
+      toast.success("Brain type updated!");
+      utils.knowledgeBase.list.invalidate();
+    },
+    onError: (error) => {
+      toast.error("Failed to update: " + error.message);
     },
   });
 
@@ -117,6 +136,18 @@ export default function KnowledgeBase() {
     }
   };
 
+  const toggleExpanded = (id: number) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   const getStatusBadge = (status: string) => {
     const config: Record<string, { icon: React.ReactNode; className: string; label: string }> = {
       pending: {
@@ -141,6 +172,34 @@ export default function KnowledgeBase() {
       },
     };
     const { icon, className, label } = config[status] || config.pending;
+    return (
+      <Badge variant="outline" className={`gap-1 ${className}`}>
+        {icon}
+        {label}
+      </Badge>
+    );
+  };
+
+  const getBrainTypeBadge = (brainType: string | null) => {
+    const type = brainType || "both";
+    const config: Record<string, { icon: React.ReactNode; className: string; label: string }> = {
+      friend: {
+        icon: <Heart className="h-3 w-3" />,
+        className: "bg-pink-100 text-pink-800 border-pink-200",
+        label: "Friend Brain",
+      },
+      expert: {
+        icon: <Briefcase className="h-3 w-3" />,
+        className: "bg-blue-100 text-blue-800 border-blue-200",
+        label: "Expert Brain",
+      },
+      both: {
+        icon: <Brain className="h-3 w-3" />,
+        className: "bg-purple-100 text-purple-800 border-purple-200",
+        label: "Both",
+      },
+    };
+    const { icon, className, label } = config[type] || config.both;
     return (
       <Badge variant="outline" className={`gap-1 ${className}`}>
         {icon}
@@ -305,7 +364,7 @@ export default function KnowledgeBase() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
-            <Card key={item.id}>
+            <Card key={item.id} className="flex flex-col">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
@@ -318,7 +377,10 @@ export default function KnowledgeBase() {
                       {item.type.toUpperCase()}
                     </Badge>
                   </div>
-                  {getStatusBadge(item.status)}
+                  <div className="flex gap-1">
+                    {item.status === "ready" && getBrainTypeBadge(item.brainType)}
+                    {getStatusBadge(item.status)}
+                  </div>
                 </div>
                 <CardTitle className="text-base mt-2 line-clamp-2">
                   {item.title}
@@ -327,7 +389,7 @@ export default function KnowledgeBase() {
                   Added {new Date(item.createdAt).toLocaleDateString()}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="pt-0">
+              <CardContent className="pt-0 flex-1 flex flex-col">
                 {item.type === "video" && (
                   <a
                     href={item.sourceUrl}
@@ -339,7 +401,105 @@ export default function KnowledgeBase() {
                     View Source
                   </a>
                 )}
-                <div className="flex gap-2">
+
+                {/* What I Learned Summary - Only show for ready items */}
+                {item.status === "ready" && item.learnedSummary && (
+                  <Collapsible 
+                    open={expandedItems.has(item.id)}
+                    onOpenChange={() => toggleExpanded(item.id)}
+                    className="mb-3"
+                  >
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="w-full justify-between p-2 h-auto">
+                        <span className="flex items-center gap-2 text-xs font-medium">
+                          <Lightbulb className="h-3 w-3 text-yellow-500" />
+                          What I Learned
+                        </span>
+                        <ChevronDown className={`h-4 w-4 transition-transform ${expandedItems.has(item.id) ? "rotate-180" : ""}`} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3 pt-2">
+                      {/* Summary */}
+                      <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          {item.learnedSummary}
+                        </p>
+                      </div>
+
+                      {/* Objections Handled */}
+                      {item.objectionsHandled && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <MessageCircle className="h-3 w-3 text-orange-500" />
+                            Objections this helps handle:
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {item.objectionsHandled.split(",").map((obj, i) => (
+                              <Badge key={i} variant="outline" className="text-xs bg-orange-50 text-orange-700 border-orange-200">
+                                {obj.trim()}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Language Styles */}
+                      {item.languageStyles && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Sparkles className="h-3 w-3 text-purple-500" />
+                            Language styles detected:
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {item.languageStyles.split(",").map((style, i) => (
+                              <Badge key={i} variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">
+                                {style.trim()}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Brain Type Selector */}
+                      <div className="space-y-2 pt-2 border-t">
+                        <Label className="text-xs">Add to Brain:</Label>
+                        <Select
+                          value={item.brainType || "both"}
+                          onValueChange={(value) => setBrainType.mutate({ 
+                            id: item.id, 
+                            brainType: value as "friend" | "expert" | "both" 
+                          })}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="friend">
+                              <span className="flex items-center gap-2">
+                                <Heart className="h-3 w-3 text-pink-500" />
+                                Friend Brain
+                              </span>
+                            </SelectItem>
+                            <SelectItem value="expert">
+                              <span className="flex items-center gap-2">
+                                <Briefcase className="h-3 w-3 text-blue-500" />
+                                Expert Brain
+                              </span>
+                            </SelectItem>
+                            <SelectItem value="both">
+                              <span className="flex items-center gap-2">
+                                <Brain className="h-3 w-3 text-purple-500" />
+                                Both
+                              </span>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+
+                <div className="flex gap-2 mt-auto">
                   {(item.status === "pending" || item.status === "failed") && (
                     <Button
                       variant="outline"

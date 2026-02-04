@@ -142,6 +142,10 @@ export async function getKnowledgeBaseItem(id: number, userId: number) {
 
 export async function updateKnowledgeBaseItem(id: number, userId: number, updates: {
   extractedContent?: string | null;
+  learnedSummary?: string | null;
+  objectionsHandled?: string | null;
+  languageStyles?: string | null;
+  brainType?: "friend" | "expert" | "both";
   status?: "pending" | "processing" | "ready" | "failed";
 }) {
   const db = await getDb();
@@ -160,20 +164,29 @@ export async function deleteKnowledgeBaseItem(id: number, userId: number) {
     .where(and(eq(knowledgeBaseItems.id, id), eq(knowledgeBaseItems.userId, userId)));
 }
 
-export async function getReadyKnowledgeBaseContent(userId: number) {
+export async function getReadyKnowledgeBaseContent(userId: number, brainType?: "friend" | "expert") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  return db.select({
+  const baseQuery = db.select({
     id: knowledgeBaseItems.id,
     type: knowledgeBaseItems.type,
     title: knowledgeBaseItems.title,
     extractedContent: knowledgeBaseItems.extractedContent,
+    brainType: knowledgeBaseItems.brainType,
   }).from(knowledgeBaseItems)
     .where(and(
       eq(knowledgeBaseItems.userId, userId),
       eq(knowledgeBaseItems.status, "ready")
     ));
+
+  const results = await baseQuery;
+  
+  // Filter by brain type if specified
+  if (brainType) {
+    return results.filter(item => item.brainType === brainType || item.brainType === "both");
+  }
+  return results;
 }
 
 // ============ CONVERSATION QUERIES ============

@@ -75,7 +75,6 @@ export const appRouter = router({
         fileName: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
-        // Upload PDF to S3
         const buffer = Buffer.from(input.fileBase64, "base64");
         const fileKey = `${ctx.user.id}/pdfs/${nanoid()}-${input.fileName}`;
         const { url } = await storagePut(fileKey, buffer, "application/pdf");
@@ -102,8 +101,6 @@ export const appRouter = router({
           let extractedContent = "";
 
           if (item.type === "video") {
-            // For videos, we'll use LLM to summarize based on the URL
-            // In production, you'd use a transcription service
             const videoResponse = await invokeLLM({
               messages: [
                 { role: "system", content: "You are a sales training content analyzer. Extract key sales techniques, phrases, and methodologies from the video description or title. Create a concise summary of actionable sales advice." },
@@ -113,7 +110,6 @@ export const appRouter = router({
             const videoContent = videoResponse.choices[0]?.message?.content;
             extractedContent = typeof videoContent === 'string' ? videoContent : '';
           } else if (item.type === "pdf") {
-            // For PDFs, use LLM with file URL
             const pdfResponse = await invokeLLM({
               messages: [
                 { role: "system", content: "You are a sales training content analyzer. Extract key sales techniques, scripts, objection handling methods, and conversation frameworks from this document. Focus on actionable phrases and approaches." },
@@ -127,16 +123,71 @@ export const appRouter = router({
             extractedContent = typeof pdfContent === 'string' ? pdfContent : '';
           }
 
+          // Generate "What I Learned" summary
+          const summaryResponse = await invokeLLM({
+            messages: [
+              { role: "system", content: "You are a sales training analyzer. Based on the extracted content, create a structured summary." },
+              { role: "user", content: `Based on this extracted sales content, provide a JSON response with:
+1. learnedSummary: A brief summary of what was learned (2-3 sentences)
+2. objectionsHandled: List of objections this content helps handle (comma-separated)
+3. languageStyles: Language patterns and styles detected (comma-separated)
+
+Content:
+${extractedContent}` },
+            ],
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "content_summary",
+                strict: true,
+                schema: {
+                  type: "object",
+                  properties: {
+                    learnedSummary: { type: "string" },
+                    objectionsHandled: { type: "string" },
+                    languageStyles: { type: "string" },
+                  },
+                  required: ["learnedSummary", "objectionsHandled", "languageStyles"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          });
+
+          const summaryContent = summaryResponse.choices[0]?.message?.content;
+          const summary = JSON.parse(typeof summaryContent === 'string' ? summaryContent : '{}');
+
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
             extractedContent,
+            learnedSummary: summary.learnedSummary,
+            objectionsHandled: summary.objectionsHandled,
+            languageStyles: summary.languageStyles,
             status: "ready",
           });
 
-          return { success: true, extractedContent };
+          return { 
+            success: true, 
+            extractedContent,
+            learnedSummary: summary.learnedSummary,
+            objectionsHandled: summary.objectionsHandled,
+            languageStyles: summary.languageStyles,
+          };
         } catch (error) {
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { status: "failed" });
           throw error;
         }
+      }),
+
+    setBrainType: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        brainType: z.enum(["friend", "expert", "both"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
+          brainType: input.brainType,
+        });
+        return { success: true };
       }),
 
     delete: protectedProcedure
@@ -168,10 +219,12 @@ export const appRouter = router({
         inputText: z.string().min(1),
         screenshotUrl: z.string().optional(),
         title: z.string().optional(),
+        replyMode: z.enum(["friend", "expert"]).default("friend"),
+        buyerName: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        // Get user's knowledge base content
-        const knowledgeItems = await db.getReadyKnowledgeBaseContent(ctx.user.id);
+        // Get user's knowledge base content filtered by reply mode
+        const knowledgeItems = await db.getReadyKnowledgeBaseContent(ctx.user.id, input.replyMode);
         const knowledgeContext = knowledgeItems
           .map(item => `[${item.type.toUpperCase()}: ${item.title}]\n${item.extractedContent}`)
           .join("\n\n---\n\n");
@@ -185,10 +238,9 @@ export const appRouter = router({
           companyName: ctx.user.companyName || "",
         };
 
-        // Analyze the conversation with Friend mode principles
-        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
-
-IMPORTANT PRINCIPLES (Friend Mode - Default):
+        // Build mode-specific instructions
+        const modeInstructions = input.replyMode === "friend" 
+          ? `FRIEND MODE PRINCIPLES:
 - You are a friendly, relatable peer who speaks like a real person texting a friend
 - You were once stuck, confused, and skeptical about online income - you found clarity
 - You are now successful and stable, calm, confident, and NOT desperate
@@ -198,7 +250,20 @@ IMPORTANT PRINCIPLES (Friend Mode - Default):
 - Share personal experience naturally
 - End most replies with a genuine question
 - Listen first, mirror their words, respond emotionally before logically
-- When someone shares doubt/fear/frustration: acknowledge emotion, share a personal moment, normalize their experience, ask a soft follow-up
+- When someone shares doubt/fear/frustration: acknowledge emotion, share a personal moment, normalize their experience, ask a soft follow-up`
+          : `EXPERT MODE PRINCIPLES:
+- You are a knowledgeable professional who provides clear, direct guidance
+- You speak with authority and confidence, backed by expertise
+- You focus on solutions and value, not just rapport
+- You can discuss products, services, and offers directly when relevant
+- You provide structured, actionable advice
+- You maintain professionalism while still being personable
+- You can recommend specific next steps and resources
+- You position yourself as a trusted advisor who can help them achieve their goals`;
+
+        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
+
+${modeInstructions}
 
 CONVERSATION STAGES (detect which one applies):
 1. First contact - warm, open-ended greeting
@@ -223,9 +288,9 @@ ${input.inputText}
 Provide:
 1. CONTEXT_TYPE: One of [objection, tone_shift, referral, first_message, follow_up, general]
 2. DETECTED_TONE: The prospect's current tone/mood
-3. PRIMARY_REPLY: A natural, human-sounding reply (Friend Mode - warm, casual, ends with question)
-4. ALTERNATIVE_REPLY: A slightly different approach (still Friend Mode)
-5. EXPERT_REFERRAL: If appropriate, a soft way to mention guidance/support (NOT a hard pitch)
+3. PRIMARY_REPLY: A natural reply in ${input.replyMode.toUpperCase()} MODE
+4. ALTERNATIVE_REPLY: A different approach (still ${input.replyMode.toUpperCase()} MODE)
+5. EXPERT_REFERRAL: If appropriate, a way to mention guidance/support
 6. REASONING: Why these replies work and any warnings if they might sound pushy
 
 Format your response as JSON:
@@ -268,10 +333,14 @@ Format your response as JSON:
         const analysisContent = response.choices[0]?.message?.content;
         const analysis = JSON.parse(typeof analysisContent === 'string' ? analysisContent : '{}');
 
-        // Create conversation record
+        // Create conversation record with buyer name and reply mode
         const conversationId = await db.createConversation({
           userId: ctx.user.id,
-          title: input.title || `Conversation ${new Date().toLocaleDateString()}`,
+          title: input.buyerName 
+            ? `${input.buyerName} - ${new Date().toLocaleDateString()}`
+            : input.title || `Conversation ${new Date().toLocaleDateString()}`,
+          buyerName: input.buyerName,
+          replyMode: input.replyMode,
           inputText: input.inputText,
           screenshotUrl: input.screenshotUrl,
           analysisContext: analysis.contextType as any,
@@ -280,13 +349,14 @@ Format your response as JSON:
 
         // Create suggestion records
         const suggestionIds: number[] = [];
+        const toneLabel = input.replyMode === "friend" ? "casual" : "professional";
 
         const primaryId = await db.createSuggestion({
           conversationId,
           userId: ctx.user.id,
           suggestionText: analysis.primaryReply,
           suggestionType: "primary",
-          tone: profile.tonePreference,
+          tone: toneLabel,
         });
         suggestionIds.push(primaryId);
 
@@ -295,7 +365,7 @@ Format your response as JSON:
           userId: ctx.user.id,
           suggestionText: analysis.alternativeReply,
           suggestionType: "alternative",
-          tone: profile.tonePreference,
+          tone: toneLabel,
         });
         suggestionIds.push(altId);
 
@@ -335,7 +405,6 @@ Format your response as JSON:
         const fileKey = `${ctx.user.id}/screenshots/${nanoid()}-${input.fileName}`;
         const { url } = await storagePut(fileKey, buffer, "image/png");
 
-        // Use LLM to extract text from the screenshot
         const response = await invokeLLM({
           messages: [
             { role: "system", content: "You are an OCR assistant. Extract all visible text from this screenshot of a conversation. Preserve the conversation structure, indicating who said what if possible. Return only the extracted text, no commentary." },

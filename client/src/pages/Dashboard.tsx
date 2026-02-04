@@ -2,9 +2,12 @@ import { useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { 
   Upload, 
@@ -17,7 +20,10 @@ import {
   FileText,
   Sparkles,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Heart,
+  Briefcase,
+  User
 } from "lucide-react";
 
 type SuggestionResult = {
@@ -42,6 +48,8 @@ export default function Dashboard() {
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [replyMode, setReplyMode] = useState<"friend" | "expert">("friend");
+  const [buyerName, setBuyerName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadScreenshot = trpc.conversation.uploadScreenshot.useMutation({
@@ -110,6 +118,8 @@ export default function Dashboard() {
     analyzeConversation.mutate({
       inputText: inputText.trim(),
       screenshotUrl: screenshotUrl || undefined,
+      replyMode,
+      buyerName: buyerName.trim() || undefined,
     });
   };
 
@@ -162,6 +172,56 @@ export default function Dashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Buyer Name Input */}
+            <div className="space-y-2">
+              <Label htmlFor="buyerName" className="flex items-center gap-2">
+                <User className="h-4 w-4" />
+                Prospect/Buyer Name (optional)
+              </Label>
+              <Input
+                id="buyerName"
+                placeholder="e.g., Sarah, John D., @username"
+                value={buyerName}
+                onChange={(e) => setBuyerName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Tag this conversation to easily find it later
+              </p>
+            </div>
+
+            {/* Friend/Expert Mode Toggle */}
+            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${replyMode === "friend" ? "bg-pink-100" : "bg-blue-100"}`}>
+                  {replyMode === "friend" ? (
+                    <Heart className="h-5 w-5 text-pink-600" />
+                  ) : (
+                    <Briefcase className="h-5 w-5 text-blue-600" />
+                  )}
+                </div>
+                <div>
+                  <p className="font-medium">
+                    {replyMode === "friend" ? "Friend Mode" : "Expert Mode"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {replyMode === "friend" 
+                      ? "Warm, casual, relationship-focused" 
+                      : "Professional, direct, solution-focused"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="mode-toggle" className="text-xs text-muted-foreground">
+                  {replyMode === "friend" ? "Friend" : "Expert"}
+                </Label>
+                <Switch
+                  id="mode-toggle"
+                  checked={replyMode === "expert"}
+                  onCheckedChange={(checked) => setReplyMode(checked ? "expert" : "friend")}
+                />
+              </div>
+            </div>
+
             <Tabs defaultValue="text" className="w-full">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="text" className="gap-2">
@@ -290,6 +350,14 @@ Me: (what should I say?)"
                   </Badge>
                   <Badge variant="outline">
                     Tone: {analysisResult.analysis.detectedTone}
+                  </Badge>
+                  <Badge 
+                    variant="outline" 
+                    className={replyMode === "friend" 
+                      ? "bg-pink-50 text-pink-700 border-pink-200" 
+                      : "bg-blue-50 text-blue-700 border-blue-200"}
+                  >
+                    {replyMode === "friend" ? "Friend Mode" : "Expert Mode"}
                   </Badge>
                 </div>
 

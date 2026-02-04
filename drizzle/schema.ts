@@ -38,6 +38,14 @@ export const knowledgeBaseItems = mysqlTable("knowledge_base_items", {
   sourceUrl: text("sourceUrl").notNull(),
   // Extracted/transcribed content for AI context
   extractedContent: text("extractedContent"),
+  // "What I Learned" summary - extracted principles, objection frameworks, language patterns
+  learnedSummary: text("learnedSummary"),
+  // Detected objections this content helps handle
+  objectionsHandled: text("objectionsHandled"),
+  // Language styles detected in the content
+  languageStyles: text("languageStyles"),
+  // Which brain to add to: friend, expert, or both
+  brainType: mysqlEnum("brainType", ["friend", "expert", "both"]).default("both"),
   // Processing status
   status: mysqlEnum("status", ["pending", "processing", "ready", "failed"]).default("pending").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -54,6 +62,10 @@ export const conversations = mysqlTable("conversations", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull(),
   title: varchar("title", { length: 256 }),
+  // Buyer/prospect name for tagging
+  buyerName: varchar("buyerName", { length: 256 }),
+  // Reply mode used: friend or expert
+  replyMode: mysqlEnum("replyMode", ["friend", "expert"]).default("friend"),
   // Original input: either extracted text from screenshot or pasted text
   inputText: text("inputText").notNull(),
   // If screenshot was uploaded, store the S3 URL
