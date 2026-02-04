@@ -88,3 +88,7 @@
 - [x] AI uses all knowledge base content in conversations
 - [x] AI suggests first messages based on prospect analysis
 - [x] AI adapts responses based on conversation stage
+
+## Bug Fixes
+
+- [x] Fix /dashboard route returning 404 error
