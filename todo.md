@@ -92,3 +92,4 @@
 ## Bug Fixes
 
 - [x] Fix /dashboard route returning 404 error
+- [x] Fix workspace.getActive returning undefined instead of null

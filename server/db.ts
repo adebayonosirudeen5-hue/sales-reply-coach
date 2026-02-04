@@ -152,7 +152,7 @@ export async function getActiveWorkspace(userId: number) {
       .where(eq(workspaces.userId, userId))
       .orderBy(workspaces.createdAt)
       .limit(1);
-    return firstWorkspace[0];
+    return firstWorkspace[0] ?? null;
   }
   return result[0];
 }
