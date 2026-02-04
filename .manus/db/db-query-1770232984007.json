@@ -1,0 +1,39 @@
+{
+  "query": "SELECT * FROM knowledge_base_items WHERE status = 'processing';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aUD1tK7DVesR3q.9cd46f6255b0 --database m9uKAAPN5b6jXSh8RAgBzz --execute SELECT * FROM knowledge_base_items WHERE status = 'processing';",
+  "rows": [
+    {
+      "id": "60001",
+      "userId": "1",
+      "type": "pdf",
+      "title": "new sales2",
+      "sourceUrl": "https://d2xsxph8kpxj0f.cloudfront.net/310519663155444537/m9uKAAPN5b6jXSh8RAgBzz/1/pdfs/7Sl1TX8_cykgpLlxJMX0i-_OceanofPDF.com_High_Trust_Selling_Make_More_Money_in_Less_Time_with_Less_Stress_-_Todd_Duncan.pdf",
+      "extractedContent": "NULL",
+      "status": "processing",
+      "createdAt": "2026-02-04 18:48:15",
+      "updatedAt": "2026-02-04 18:49:24",
+      "learnedSummary": "NULL",
+      "objectionsHandled": "NULL",
+      "languageStyles": "NULL",
+      "brainType": "both",
+      "platform": "NULL",
+      "workspaceId": "NULL",
+      "fullContent": "NULL",
+      "comprehensiveSummary": "NULL",
+      "salesPsychology": "NULL",
+      "rapportTechniques": "NULL",
+      "conversationStarters": "NULL",
+      "objectionFrameworks": "NULL",
+      "closingTechniques": "NULL",
+      "languagePatterns": "NULL",
+      "emotionalTriggers": "NULL",
+      "trustStrategies": "NULL",
+      "processingProgress": "10",
+      "errorMessage": "NULL"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tuserId\ttype\ttitle\tsourceUrl\textractedContent\tstatus\tcreatedAt\tupdatedAt\tlearnedSummary\tobjectionsHandled\tlanguageStyles\tbrainType\tplatform\tworkspaceId\tfullContent\tcomprehensiveSummary\tsalesPsychology\trapportTechniques\tconversationStarters\tobjectionFrameworks\tclosingTechniques\tlanguagePatterns\temotionalTriggers\ttrustStrategies\tprocessingProgress\terrorMessage\n60001\t1\tpdf\tnew sales2\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663155444537/m9uKAAPN5b6jXSh8RAgBzz/1/pdfs/7Sl1TX8_cykgpLlxJMX0i-_OceanofPDF.com_High_Trust_Selling_Make_More_Money_in_Less_Time_with_Less_Stress_-_Todd_Duncan.pdf\tNULL\tprocessing\t2026-02-04 18:48:15\t2026-02-04 18:49:24\tNULL\tNULL\tNULL\tboth\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\t10\tNULL\n",
+  "stderr": "",
+  "execution_time_ms": 54
+}

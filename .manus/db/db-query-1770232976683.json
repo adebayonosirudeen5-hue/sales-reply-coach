@@ -1,0 +1,19 @@
+{
+  "query": "SELECT id, title, type, status, processingProgress, createdAt, updatedAt FROM knowledge_base_items WHERE status = 'processing' ORDER BY createdAt DESC LIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aUD1tK7DVesR3q.9cd46f6255b0 --database m9uKAAPN5b6jXSh8RAgBzz --execute SELECT id, title, type, status, processingProgress, createdAt, updatedAt FROM knowledge_base_items WHERE status = 'processing' ORDER BY createdAt DESC LIMIT 10;",
+  "rows": [
+    {
+      "id": "60001",
+      "title": "new sales2",
+      "type": "pdf",
+      "status": "processing",
+      "processingProgress": "10",
+      "createdAt": "2026-02-04 18:48:15",
+      "updatedAt": "2026-02-04 18:49:24"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttitle\ttype\tstatus\tprocessingProgress\tcreatedAt\tupdatedAt\n60001\tnew sales2\tpdf\tprocessing\t10\t2026-02-04 18:48:15\t2026-02-04 18:49:24\n",
+  "stderr": "",
+  "execution_time_ms": 188
+}

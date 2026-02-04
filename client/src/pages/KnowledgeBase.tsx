@@ -520,8 +520,31 @@ export default function KnowledgeBase() {
                   </Collapsible>
                 )}
 
+                {/* Show error message for failed items */}
+                {item.status === "failed" && item.errorMessage && (
+                  <div className="bg-destructive/10 border border-destructive/20 rounded-md p-2 mb-3">
+                    <p className="text-xs text-destructive">{item.errorMessage}</p>
+                  </div>
+                )}
+
+                {/* Show progress for processing items */}
+                {item.status === "processing" && (
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                      <span>Processing...</span>
+                      <span>{item.processingProgress || 0}%</span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-primary transition-all duration-300" 
+                        style={{ width: `${item.processingProgress || 0}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-2 mt-auto">
-                  {(item.status === "pending" || item.status === "failed") && (
+                  {(item.status === "pending" || item.status === "failed" || item.status === "processing") && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -531,10 +554,12 @@ export default function KnowledgeBase() {
                     >
                       {processItem.isPending ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : item.status === "processing" ? (
+                        <RefreshCw className="h-3 w-3" />
                       ) : (
                         <RefreshCw className="h-3 w-3" />
                       )}
-                      Process
+                      {item.status === "processing" ? "Retry" : item.status === "failed" ? "Retry" : "Process"}
                     </Button>
                   )}
                   <Button

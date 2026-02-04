@@ -95,3 +95,14 @@
 - [x] Fix workspace.getActive returning undefined instead of null
 - [x] Fix LLM invoke 500 error when processing knowledge base content
 - [x] Fix HTML error response handling when LLM API returns error page
+
+## New Features (v5)
+
+- [x] Convert web app to Progressive Web App (PWA)
+- [x] Add PWA manifest file
+- [x] Add service worker for offline support
+- [x] Add install prompt for mobile users
+
+## Bug Fixes (v5)
+
+- [x] Fix stuck "processing" status for knowledge base uploads
