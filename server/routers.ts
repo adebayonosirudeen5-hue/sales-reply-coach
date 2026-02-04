@@ -20,6 +20,53 @@ function detectPlatform(url: string): string {
   return "other";
 }
 
+// Friend mode behavior rules from the spec
+const FRIEND_MODE_INSTRUCTIONS = `ROLE & IDENTITY:
+You are a friendly, relatable peer who speaks like a real person texting a friend.
+Background: You were once stuck, confused, overwhelmed, and skeptical about online income. You tried things that didn't work. You eventually found clarity and consistency.
+Current status: You are now successful and stable. You are calm, confident, and not desperate. You never chase or convince.
+
+COMMUNICATION RULES:
+- Sound human, casual, warm, and supportive
+- Never use hype language
+- Never say "buy", "offer", or "program" unless the other person asks
+- Share personal experience naturally
+- End most replies with a genuine question
+- Your goal is to understand the person and make sure they convert to expert side
+
+AUDIENCE AWARENESS:
+Assume the person may be: a stay-at-home mum, a 9-5 worker, a beginner in digital marketing, someone burned before, or from another industry.
+Always listen first, mirror their words, and respond emotionally before logically.
+
+PAIN & EMOTION MIRRORING:
+When someone shares confusion, doubt, fear, or frustration:
+1. Acknowledge the emotion
+2. Share a short personal moment where you felt the same
+3. Normalize their experience
+4. Ask a soft follow-up question
+
+"WHAT DID YOU USE?" RESPONSE LOGIC:
+When the user asks any variation of "What did you use?" or "How did you do it?":
+1. NEVER immediately recommend a tool, funnel, or person
+2. First, ask a grounding question to understand their situation
+3. After they answer, reflect their situation back to them
+4. Share your turning point (story, not pitch)
+5. Only then may you mention a structured solution (permission-based)
+6. End by inviting their decision, not pushing yours`;
+
+const EXPERT_MODE_INSTRUCTIONS = `ROLE & IDENTITY:
+You are a knowledgeable professional who provides clear, direct guidance.
+You speak with authority and confidence, backed by expertise.
+You focus on solutions and value, not just rapport.
+
+COMMUNICATION RULES:
+- You can discuss products, services, and offers directly when relevant
+- You provide structured, actionable advice
+- You maintain professionalism while still being personable
+- You can recommend specific next steps and resources
+- Be direct but not pushy
+- Focus on value and outcomes`;
+
 export const appRouter = router({
   system: systemRouter,
   
@@ -32,48 +79,544 @@ export const appRouter = router({
     }),
   }),
 
-  // User profile management
-  profile: router({
-    get: protectedProcedure.query(async ({ ctx }) => {
-      return {
-        salesStyle: ctx.user.salesStyle,
-        industry: ctx.user.industry,
-        productDescription: ctx.user.productDescription,
-        tonePreference: ctx.user.tonePreference,
-        companyName: ctx.user.companyName,
-      };
+  // ============ WORKSPACE MANAGEMENT ============
+  workspace: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return db.getWorkspaces(ctx.user.id);
     }),
-    
-    update: protectedProcedure
+
+    getActive: protectedProcedure.query(async ({ ctx }) => {
+      return db.getActiveWorkspace(ctx.user.id);
+    }),
+
+    get: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getWorkspace(input.id, ctx.user.id);
+      }),
+
+    create: protectedProcedure
       .input(z.object({
-        salesStyle: z.string().nullable().optional(),
-        industry: z.string().nullable().optional(),
-        productDescription: z.string().nullable().optional(),
-        tonePreference: z.string().nullable().optional(),
-        companyName: z.string().nullable().optional(),
+        name: z.string().min(1),
+        nicheDescription: z.string().optional(),
+        instagramUrl: z.string().optional(),
+        tiktokUrl: z.string().optional(),
+        storeUrl: z.string().optional(),
+        otherUrl: z.string().optional(),
+        defaultReplyMode: z.enum(["friend", "expert"]).default("friend"),
       }))
       .mutation(async ({ ctx, input }) => {
-        await db.updateUserProfile(ctx.user.id, input);
+        const id = await db.createWorkspace({
+          userId: ctx.user.id,
+          ...input,
+          isActive: true, // New workspace becomes active
+        });
+        
+        // Deactivate other workspaces
+        await db.setActiveWorkspace(id, ctx.user.id);
+        
+        return { id, success: true };
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        nicheDescription: z.string().optional(),
+        instagramUrl: z.string().optional(),
+        tiktokUrl: z.string().optional(),
+        storeUrl: z.string().optional(),
+        otherUrl: z.string().optional(),
+        defaultReplyMode: z.enum(["friend", "expert"]).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { id, ...updates } = input;
+        await db.updateWorkspace(id, ctx.user.id, updates);
+        return { success: true };
+      }),
+
+    setActive: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await db.setActiveWorkspace(input.id, ctx.user.id);
+        return { success: true };
+      }),
+
+    // Analyze user's own profile from social URLs
+    analyzeProfile: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const workspace = await db.getWorkspace(input.id, ctx.user.id);
+        if (!workspace) throw new Error("Workspace not found");
+
+        const urls = [
+          workspace.instagramUrl,
+          workspace.tiktokUrl,
+          workspace.storeUrl,
+          workspace.otherUrl,
+        ].filter(Boolean);
+
+        if (urls.length === 0 && !workspace.nicheDescription) {
+          throw new Error("Please add at least one social URL or niche description");
+        }
+
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are a business profile analyzer. Analyze the provided information to understand what products/services this person offers and their target audience." },
+            { role: "user", content: `Analyze this business profile:
+Niche Description: ${workspace.nicheDescription || "Not provided"}
+Instagram: ${workspace.instagramUrl || "Not provided"}
+TikTok: ${workspace.tiktokUrl || "Not provided"}
+Store: ${workspace.storeUrl || "Not provided"}
+Other: ${workspace.otherUrl || "Not provided"}
+
+Provide a JSON response with:
+1. profileAnalysis: Summary of what this person does/sells
+2. productsDetected: List of products/services detected` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "profile_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  profileAnalysis: { type: "string" },
+                  productsDetected: { type: "string" },
+                },
+                required: ["profileAnalysis", "productsDetected"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+
+        const content = response.choices[0]?.message?.content;
+        const analysis = JSON.parse(typeof content === 'string' ? content : '{}');
+
+        await db.updateWorkspace(input.id, ctx.user.id, {
+          profileAnalysis: analysis.profileAnalysis,
+          productsDetected: analysis.productsDetected,
+        });
+
+        return { success: true, ...analysis };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await db.deleteWorkspace(input.id, ctx.user.id);
         return { success: true };
       }),
   }),
 
-  // Knowledge base management
-  knowledgeBase: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return db.getKnowledgeBaseItems(ctx.user.id);
-    }),
+  // ============ PROSPECT MANAGEMENT (WhatsApp-style contacts) ============
+  prospect: router({
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getProspects(input.workspaceId, ctx.user.id);
+      }),
 
-    // New: Add URL (YouTube, Instagram, etc.)
+    get: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const prospect = await db.getProspect(input.id, ctx.user.id);
+        if (!prospect) throw new Error("Prospect not found");
+        const messages = await db.getChatMessages(input.id, ctx.user.id);
+        return { prospect, messages };
+      }),
+
+    create: protectedProcedure
+      .input(z.object({
+        workspaceId: z.number(),
+        name: z.string().min(1),
+        instagramUrl: z.string().optional(),
+        tiktokUrl: z.string().optional(),
+        storeUrl: z.string().optional(),
+        otherUrl: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const id = await db.createProspect({
+          ...input,
+          userId: ctx.user.id,
+        });
+        return { id, success: true };
+      }),
+
+    // Analyze prospect's profile to suggest first message
+    analyzeProfile: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const prospect = await db.getProspect(input.id, ctx.user.id);
+        if (!prospect) throw new Error("Prospect not found");
+
+        const urls = [
+          prospect.instagramUrl,
+          prospect.tiktokUrl,
+          prospect.storeUrl,
+          prospect.otherUrl,
+        ].filter(Boolean);
+
+        if (urls.length === 0) {
+          throw new Error("Please add at least one social URL for this prospect");
+        }
+
+        // Get workspace context
+        const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
+        const workspaceContext = workspace ? `
+Your Business: ${workspace.profileAnalysis || workspace.nicheDescription || "Not specified"}
+Your Products: ${workspace.productsDetected || "Not specified"}` : "";
+
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: `You are a sales conversation strategist. Analyze the prospect's profile and suggest a personalized first message that will get them to reply.
+${FRIEND_MODE_INSTRUCTIONS}` },
+            { role: "user", content: `Analyze this prospect's profile and suggest a first message:
+${workspaceContext}
+
+Prospect's Profile:
+Instagram: ${prospect.instagramUrl || "Not provided"}
+TikTok: ${prospect.tiktokUrl || "Not provided"}
+Store: ${prospect.storeUrl || "Not provided"}
+Other: ${prospect.otherUrl || "Not provided"}
+
+Provide a JSON response with:
+1. profileAnalysis: What you learned about this prospect
+2. detectedInterests: Their interests/niche
+3. suggestedFirstMessage: A natural, friendly first message that references something specific about them` },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "prospect_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  profileAnalysis: { type: "string" },
+                  detectedInterests: { type: "string" },
+                  suggestedFirstMessage: { type: "string" },
+                },
+                required: ["profileAnalysis", "detectedInterests", "suggestedFirstMessage"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+
+        const content = response.choices[0]?.message?.content;
+        const analysis = JSON.parse(typeof content === 'string' ? content : '{}');
+
+        await db.updateProspect(input.id, ctx.user.id, {
+          profileAnalysis: analysis.profileAnalysis,
+          detectedInterests: analysis.detectedInterests,
+          suggestedFirstMessage: analysis.suggestedFirstMessage,
+        });
+
+        return { success: true, ...analysis };
+      }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        replyMode: z.enum(["friend", "expert"]).optional(),
+        outcome: z.enum(["active", "won", "lost", "ghosted"]).optional(),
+        outcomeNotes: z.string().optional(),
+        conversationStage: z.enum([
+          "first_contact", "warm_rapport", "pain_discovery",
+          "objection_resistance", "trust_reinforcement",
+          "referral_to_expert", "expert_close"
+        ]).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { id, ...updates } = input;
+        await db.updateProspect(id, ctx.user.id, updates);
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await db.deleteProspect(input.id, ctx.user.id);
+        return { success: true };
+      }),
+
+    // Get stats for analytics
+    stats: protectedProcedure
+      .input(z.object({ workspaceId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        return db.getProspectStats(ctx.user.id, input.workspaceId);
+      }),
+  }),
+
+  // ============ CHAT MESSAGES (WhatsApp-style) ============
+  chat: router({
+    getMessages: protectedProcedure
+      .input(z.object({ prospectId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getChatMessages(input.prospectId, ctx.user.id);
+      }),
+
+    // Upload screenshot and extract text via OCR
+    uploadScreenshot: protectedProcedure
+      .input(z.object({
+        prospectId: z.number(),
+        fileBase64: z.string(),
+        fileName: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const fileKey = `${ctx.user.id}/screenshots/${nanoid()}-${input.fileName}`;
+        const { url } = await storagePut(fileKey, buffer, "image/png");
+
+        // OCR the screenshot
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are an OCR assistant. Extract all visible text from this screenshot of a conversation. Preserve the conversation structure, indicating who said what if possible. Return only the extracted text, no commentary." },
+            { role: "user", content: [
+              { type: "text", text: "Extract all text from this conversation screenshot:" },
+              { type: "image_url", image_url: { url, detail: "high" } }
+            ] },
+          ],
+        });
+
+        const ocrContent = response.choices[0]?.message?.content;
+        const extractedText = typeof ocrContent === 'string' ? ocrContent : '';
+
+        return { url, extractedText };
+      }),
+
+    // Send inbound message (from prospect) and get AI suggestions
+    sendInbound: protectedProcedure
+      .input(z.object({
+        prospectId: z.number(),
+        content: z.string().min(1),
+        screenshotUrl: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const prospect = await db.getProspect(input.prospectId, ctx.user.id);
+        if (!prospect) throw new Error("Prospect not found");
+
+        // Get workspace context
+        const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
+        
+        // Get conversation history
+        const conversationContext = await db.getConversationContext(input.prospectId, ctx.user.id);
+        
+        // Get knowledge base content
+        const knowledgeItems = await db.getReadyKnowledgeBaseContent(
+          ctx.user.id, 
+          prospect.replyMode || "friend",
+          prospect.workspaceId
+        );
+        const knowledgeContext = knowledgeItems.map(k => 
+          `[${k.title}]: ${k.comprehensiveSummary || k.fullContent || ''}`
+        ).join("\n\n");
+
+        // Create the inbound message
+        const messageId = await db.createChatMessage({
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          direction: "inbound",
+          content: input.content,
+          screenshotUrl: input.screenshotUrl,
+        });
+
+        // Determine mode instructions
+        const modeInstructions = prospect.replyMode === "expert" 
+          ? EXPERT_MODE_INSTRUCTIONS 
+          : FRIEND_MODE_INSTRUCTIONS;
+
+        // Generate AI suggestions
+        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
+
+${modeInstructions}
+
+YOUR BUSINESS CONTEXT:
+${workspace?.profileAnalysis || workspace?.nicheDescription || "Not specified"}
+Products/Services: ${workspace?.productsDetected || "Not specified"}
+
+PROSPECT CONTEXT:
+Name: ${prospect.name}
+Profile: ${prospect.profileAnalysis || "Not analyzed"}
+Interests: ${prospect.detectedInterests || "Unknown"}
+Current Stage: ${prospect.conversationStage}
+
+${knowledgeContext ? `YOUR SALES KNOWLEDGE BASE:\n${knowledgeContext}\n\n` : ""}
+
+CONVERSATION HISTORY:
+${conversationContext || "This is the first message"}
+
+LATEST MESSAGE FROM PROSPECT:
+${input.content}
+
+Analyze this message and provide reply suggestions. Consider:
+1. What stage of the conversation is this?
+2. What is the prospect's emotional state?
+3. What would be the most effective response?
+
+Provide a JSON response with:
+- contextType: The conversation stage
+- detectedTone: The prospect's current tone/mood
+- primaryReply: Your best suggested reply
+- alternativeReply: A different approach
+- softReply: A gentler/more cautious version
+- whyThisWorks: Brief explanation of why the primary reply works
+- pushyWarning: If any reply might sound pushy, explain why (or null)`;
+
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: "You are an expert sales coach. Always respond with valid JSON only." },
+            { role: "user", content: analysisPrompt },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "chat_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  contextType: { type: "string" },
+                  detectedTone: { type: "string" },
+                  primaryReply: { type: "string" },
+                  alternativeReply: { type: "string" },
+                  softReply: { type: "string" },
+                  whyThisWorks: { type: "string" },
+                  pushyWarning: { type: ["string", "null"] },
+                },
+                required: ["contextType", "detectedTone", "primaryReply", "alternativeReply", "softReply", "whyThisWorks", "pushyWarning"],
+                additionalProperties: false,
+              },
+            },
+          },
+        });
+
+        const analysisContent = response.choices[0]?.message?.content;
+        const analysis = JSON.parse(typeof analysisContent === 'string' ? analysisContent : '{}');
+
+        // Update the message with analysis
+        await db.updateProspect(input.prospectId, ctx.user.id, {
+          conversationStage: analysis.contextType as any,
+        });
+
+        // Create suggestion records
+        const suggestions = [];
+        
+        const primaryId = await db.createAiSuggestion({
+          messageId,
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          suggestionText: analysis.primaryReply,
+          suggestionType: "primary",
+          whyThisWorks: analysis.whyThisWorks,
+          pushyWarning: analysis.pushyWarning,
+        });
+        suggestions.push({ id: primaryId, type: "primary", text: analysis.primaryReply, whyThisWorks: analysis.whyThisWorks });
+
+        const altId = await db.createAiSuggestion({
+          messageId,
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          suggestionText: analysis.alternativeReply,
+          suggestionType: "alternative",
+        });
+        suggestions.push({ id: altId, type: "alternative", text: analysis.alternativeReply });
+
+        const softId = await db.createAiSuggestion({
+          messageId,
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          suggestionText: analysis.softReply,
+          suggestionType: "soft",
+        });
+        suggestions.push({ id: softId, type: "soft", text: analysis.softReply });
+
+        return {
+          messageId,
+          analysis: {
+            contextType: analysis.contextType,
+            detectedTone: analysis.detectedTone,
+            pushyWarning: analysis.pushyWarning,
+          },
+          suggestions,
+        };
+      }),
+
+    // Record outbound message (what user actually sent)
+    sendOutbound: protectedProcedure
+      .input(z.object({
+        prospectId: z.number(),
+        content: z.string().min(1),
+        suggestionId: z.number().optional(), // If they used an AI suggestion
+        isAiSuggestion: z.boolean().default(false),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const messageId = await db.createChatMessage({
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          direction: "outbound",
+          content: input.content,
+          isAiSuggestion: input.isAiSuggestion,
+          wasSent: true,
+        });
+
+        // Mark suggestion as used if provided
+        if (input.suggestionId) {
+          await db.updateAiSuggestionUsage(input.suggestionId, ctx.user.id, true);
+        }
+
+        return { messageId, success: true };
+      }),
+
+    // Get suggestions for a specific message
+    getSuggestions: protectedProcedure
+      .input(z.object({ messageId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getAiSuggestions(input.messageId, ctx.user.id);
+      }),
+
+    // Provide feedback on a suggestion
+    suggestionFeedback: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        feedback: z.enum(["helpful", "not_helpful"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await db.updateAiSuggestionFeedback(input.id, ctx.user.id, input.feedback);
+        return { success: true };
+      }),
+  }),
+
+  // ============ KNOWLEDGE BASE ============
+  knowledgeBase: router({
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        return db.getKnowledgeBaseItems(ctx.user.id, input.workspaceId);
+      }),
+
+    get: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getKnowledgeBaseItem(input.id, ctx.user.id);
+      }),
+
+    // Add URL (YouTube, Instagram, TikTok, etc.)
     addUrl: protectedProcedure
       .input(z.object({
         title: z.string().min(1),
         url: z.string().url(),
+        workspaceId: z.number().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const platform = detectPlatform(input.url);
         const id = await db.createKnowledgeBaseItem({
           userId: ctx.user.id,
+          workspaceId: input.workspaceId,
           type: "url",
           title: input.title,
           sourceUrl: input.url,
@@ -88,6 +631,7 @@ export const appRouter = router({
         title: z.string().min(1),
         fileBase64: z.string(),
         fileName: z.string(),
+        workspaceId: z.number().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const buffer = Buffer.from(input.fileBase64, "base64");
@@ -96,6 +640,7 @@ export const appRouter = router({
 
         const id = await db.createKnowledgeBaseItem({
           userId: ctx.user.id,
+          workspaceId: input.workspaceId,
           type: "pdf",
           title: input.title,
           sourceUrl: url,
@@ -104,86 +649,121 @@ export const appRouter = router({
         return { id, url, success: true };
       }),
 
+    // Deep learning process - reads entire content and extracts everything
     processItem: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         const item = await db.getKnowledgeBaseItem(input.id, ctx.user.id);
         if (!item) throw new Error("Item not found");
 
-        await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { status: "processing" });
+        await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
+          status: "processing",
+          processingProgress: 10,
+        });
 
         try {
-          let extractedContent = "";
+          let fullContent = "";
 
-          if (item.type === "url" || item.type === "video") {
-            // For URLs, use LLM with video/audio understanding
+          // Step 1: Extract full content
+          if (item.type === "url") {
             const platform = item.platform || detectPlatform(item.sourceUrl);
             
-            const urlResponse = await invokeLLM({
+            const extractResponse = await invokeLLM({
               messages: [
                 { 
                   role: "system", 
-                  content: `You are a sales training content analyzer specializing in extracting insights from ${platform} content. 
-Extract key sales techniques, phrases, scripts, objection handling methods, and conversation frameworks.
-Focus on actionable advice that can be used in real sales conversations.
-If the content is a video, analyze any visible text, captions, or descriptions.` 
+                  content: `You are a comprehensive content analyzer. Extract EVERYTHING from this ${platform} content - every technique, every phrase, every insight. Read it as if you're studying for an exam and need to remember every detail.` 
                 },
                 { 
                   role: "user", 
-                  content: `Analyze this ${platform} content and extract all sales-related insights:
+                  content: `Analyze this ${platform} content completely:
 Title: ${item.title}
 URL: ${item.sourceUrl}
 
-Provide a comprehensive summary of:
-1. Key sales techniques and methodologies
-2. Specific phrases and scripts that work
-3. Objection handling approaches
-4. Conversation frameworks and patterns
-5. Any unique insights or strategies` 
+Extract EVERYTHING you can learn from this content. Include:
+- All sales techniques and methodologies
+- Every specific phrase, script, or word choice
+- All objection handling approaches
+- Conversation frameworks and patterns
+- Psychology principles used
+- Rapport building techniques
+- Trust building strategies
+- Closing techniques
+- Any unique insights or strategies
+- Emotional triggers and responses
+- Language patterns
+
+Be comprehensive - this is going into a knowledge base that will be used to help with real sales conversations.` 
                 },
               ],
             });
-            const urlContent = urlResponse.choices[0]?.message?.content;
-            extractedContent = typeof urlContent === 'string' ? urlContent : '';
+            const extractContent = extractResponse.choices[0]?.message?.content;
+            fullContent = typeof extractContent === 'string' ? extractContent : '';
           } else if (item.type === "pdf") {
             const pdfResponse = await invokeLLM({
               messages: [
-                { role: "system", content: "You are a sales training content analyzer. Extract key sales techniques, scripts, objection handling methods, and conversation frameworks from this document. Focus on actionable phrases and approaches." },
+                { role: "system", content: "You are a comprehensive book analyzer. Read this entire document from start to finish and extract EVERYTHING - every technique, every principle, every example. This is going into a knowledge base that will be used to help with real sales conversations." },
                 { role: "user", content: [
-                  { type: "text", text: `Analyze this sales training PDF and extract key insights, scripts, and techniques:\nTitle: ${item.title}` },
+                  { type: "text", text: `Read this entire PDF from page 1 to the end. Extract EVERYTHING you learn:
+Title: ${item.title}
+
+Include:
+- All sales techniques and methodologies
+- Every specific phrase, script, or word choice
+- All objection handling approaches
+- Conversation frameworks and patterns
+- Psychology principles
+- Rapport building techniques
+- Trust building strategies
+- Closing techniques
+- Any unique insights or strategies
+- Emotional triggers and responses
+- Language patterns
+- Examples and case studies
+
+Be comprehensive - don't skip anything.` },
                   { type: "file_url", file_url: { url: item.sourceUrl, mime_type: "application/pdf" } }
                 ] },
               ],
             });
             const pdfContent = pdfResponse.choices[0]?.message?.content;
-            extractedContent = typeof pdfContent === 'string' ? pdfContent : '';
+            fullContent = typeof pdfContent === 'string' ? pdfContent : '';
           }
 
-          // Generate "What I Learned" summary
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
+            fullContent,
+            processingProgress: 50,
+          });
+
+          // Step 2: Generate structured summary of what was learned
           const summaryResponse = await invokeLLM({
             messages: [
-              { role: "system", content: "You are a sales training analyzer. Based on the extracted content, create a structured summary." },
-              { role: "user", content: `Based on this extracted sales content, provide a JSON response with:
-1. learnedSummary: A brief summary of what was learned (2-3 sentences)
-2. objectionsHandled: List of objections this content helps handle (comma-separated)
-3. languageStyles: Language patterns and styles detected (comma-separated)
+              { role: "system", content: "You are a sales training expert. Organize the extracted content into structured categories." },
+              { role: "user", content: `Based on this extracted content, provide a comprehensive structured summary:
 
-Content:
-${extractedContent}` },
+${fullContent}
+
+Provide a JSON response with detailed information for each category:` },
             ],
             response_format: {
               type: "json_schema",
               json_schema: {
-                name: "content_summary",
+                name: "deep_learning_summary",
                 strict: true,
                 schema: {
                   type: "object",
                   properties: {
-                    learnedSummary: { type: "string" },
-                    objectionsHandled: { type: "string" },
-                    languageStyles: { type: "string" },
+                    comprehensiveSummary: { type: "string", description: "Overall summary of what was learned (2-3 paragraphs)" },
+                    salesPsychology: { type: "string", description: "Psychology principles and human behavior insights" },
+                    rapportTechniques: { type: "string", description: "Techniques for building rapport and connection" },
+                    conversationStarters: { type: "string", description: "Opening lines and first message strategies" },
+                    objectionFrameworks: { type: "string", description: "How to handle objections and resistance" },
+                    closingTechniques: { type: "string", description: "Techniques for closing and getting commitment" },
+                    languagePatterns: { type: "string", description: "Specific phrases, words, and language patterns to use" },
+                    emotionalTriggers: { type: "string", description: "Emotional triggers and how to respond to them" },
+                    trustStrategies: { type: "string", description: "Strategies for building trust and credibility" },
                   },
-                  required: ["learnedSummary", "objectionsHandled", "languageStyles"],
+                  required: ["comprehensiveSummary", "salesPsychology", "rapportTechniques", "conversationStarters", "objectionFrameworks", "closingTechniques", "languagePatterns", "emotionalTriggers", "trustStrategies"],
                   additionalProperties: false,
                 },
               },
@@ -194,22 +774,20 @@ ${extractedContent}` },
           const summary = JSON.parse(typeof summaryContent === 'string' ? summaryContent : '{}');
 
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
-            extractedContent,
-            learnedSummary: summary.learnedSummary,
-            objectionsHandled: summary.objectionsHandled,
-            languageStyles: summary.languageStyles,
+            ...summary,
             status: "ready",
+            processingProgress: 100,
           });
 
           return { 
             success: true, 
-            extractedContent,
-            learnedSummary: summary.learnedSummary,
-            objectionsHandled: summary.objectionsHandled,
-            languageStyles: summary.languageStyles,
+            ...summary,
           };
         } catch (error) {
-          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { status: "failed" });
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
+            status: "failed",
+            errorMessage: error instanceof Error ? error.message : "Unknown error",
+          });
           throw error;
         }
       }),
@@ -230,491 +808,6 @@ ${extractedContent}` },
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await db.deleteKnowledgeBaseItem(input.id, ctx.user.id);
-        return { success: true };
-      }),
-  }),
-
-  // Conversation and suggestion management
-  conversation: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return db.getConversations(ctx.user.id);
-    }),
-
-    get: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .query(async ({ ctx, input }) => {
-        const conversation = await db.getConversation(input.id, ctx.user.id);
-        if (!conversation) throw new Error("Conversation not found");
-        
-        const messages = await db.getConversationMessages(input.id, ctx.user.id);
-        const suggestions = await db.getSuggestionsForConversation(input.id, ctx.user.id);
-        return { conversation, messages, suggestions };
-      }),
-
-    // Get stats for analytics
-    stats: protectedProcedure.query(async ({ ctx }) => {
-      return db.getConversationStats(ctx.user.id);
-    }),
-
-    // Start a new conversation thread
-    create: protectedProcedure
-      .input(z.object({
-        title: z.string().optional(),
-        buyerName: z.string().optional(),
-        replyMode: z.enum(["friend", "expert"]).default("friend"),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const conversationId = await db.createConversation({
-          userId: ctx.user.id,
-          title: input.title || `Conversation ${new Date().toLocaleDateString()}`,
-          buyerName: input.buyerName,
-          replyMode: input.replyMode,
-        });
-        return { conversationId };
-      }),
-
-    // Add a message to existing conversation (threading)
-    addMessage: protectedProcedure
-      .input(z.object({
-        conversationId: z.number(),
-        inputText: z.string().min(1),
-        screenshotUrl: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const conversation = await db.getConversation(input.conversationId, ctx.user.id);
-        if (!conversation) throw new Error("Conversation not found");
-
-        // Get previous messages for context
-        const previousThread = await db.getConversationThread(input.conversationId, ctx.user.id);
-
-        // Get user's knowledge base content filtered by reply mode
-        const knowledgeItems = await db.getReadyKnowledgeBaseContent(ctx.user.id, conversation.replyMode || "friend");
-        const knowledgeContext = knowledgeItems
-          .map(item => `[${item.type.toUpperCase()}: ${item.title}]\n${item.extractedContent}`)
-          .join("\n\n---\n\n");
-
-        // Get user profile for personalization
-        const profile = {
-          salesStyle: ctx.user.salesStyle || "consultative",
-          industry: ctx.user.industry || "general",
-          productDescription: ctx.user.productDescription || "",
-          tonePreference: ctx.user.tonePreference || "professional",
-          companyName: ctx.user.companyName || "",
-        };
-
-        const replyMode = conversation.replyMode || "friend";
-
-        // Build mode-specific instructions
-        const modeInstructions = replyMode === "friend" 
-          ? `FRIEND MODE PRINCIPLES:
-- You are a friendly, relatable peer who speaks like a real person texting a friend
-- You were once stuck, confused, and skeptical about online income - you found clarity
-- You are now successful and stable, calm, confident, and NOT desperate
-- You NEVER chase or convince - you understand and guide
-- Sound human, casual, warm, and supportive
-- NEVER use hype language or say "buy", "offer", or "program" unless asked
-- Share personal experience naturally
-- End most replies with a genuine question
-- Listen first, mirror their words, respond emotionally before logically`
-          : `EXPERT MODE PRINCIPLES:
-- You are a knowledgeable professional who provides clear, direct guidance
-- You speak with authority and confidence, backed by expertise
-- You focus on solutions and value, not just rapport
-- You can discuss products, services, and offers directly when relevant
-- You provide structured, actionable advice
-- You maintain professionalism while still being personable
-- You can recommend specific next steps and resources`;
-
-        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
-
-${modeInstructions}
-
-USER PROFILE:
-- Sales Style: ${profile.salesStyle}
-- Industry: ${profile.industry}
-- Product/Service: ${profile.productDescription}
-- Preferred Tone: ${profile.tonePreference}
-- Company: ${profile.companyName}
-
-${knowledgeContext ? `USER'S SALES KNOWLEDGE BASE:\n${knowledgeContext}\n\n` : ""}
-
-${previousThread ? `PREVIOUS CONVERSATION CONTEXT:\n${previousThread}\n\n---\n\n` : ""}
-
-NEW MESSAGE TO RESPOND TO:
-${input.inputText}
-
-Provide:
-1. CONTEXT_TYPE: One of [objection, tone_shift, referral, first_message, follow_up, general]
-2. DETECTED_TONE: The prospect's current tone/mood
-3. PRIMARY_REPLY: A natural reply in ${replyMode.toUpperCase()} MODE
-4. ALTERNATIVE_REPLY: A different approach (still ${replyMode.toUpperCase()} MODE)
-5. EXPERT_REFERRAL: If appropriate, a way to mention guidance/support
-6. REASONING: Why these replies work
-
-Format your response as JSON:
-{
-  "contextType": "...",
-  "detectedTone": "...",
-  "primaryReply": "...",
-  "alternativeReply": "...",
-  "expertReferral": "..." or null,
-  "reasoning": "Brief explanation of why these replies work"
-}`;
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are an expert sales coach. Always respond with valid JSON only." },
-            { role: "user", content: analysisPrompt },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "conversation_analysis",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  contextType: { type: "string", enum: ["objection", "tone_shift", "referral", "first_message", "follow_up", "general"] },
-                  detectedTone: { type: "string" },
-                  primaryReply: { type: "string" },
-                  alternativeReply: { type: "string" },
-                  expertReferral: { type: ["string", "null"] },
-                  reasoning: { type: "string" },
-                },
-                required: ["contextType", "detectedTone", "primaryReply", "alternativeReply", "expertReferral", "reasoning"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
-        const analysisContent = response.choices[0]?.message?.content;
-        const analysis = JSON.parse(typeof analysisContent === 'string' ? analysisContent : '{}');
-
-        // Create message record
-        const messageId = await db.createConversationMessage({
-          conversationId: input.conversationId,
-          userId: ctx.user.id,
-          inputText: input.inputText,
-          screenshotUrl: input.screenshotUrl,
-          analysisContext: analysis.contextType as any,
-          detectedTone: analysis.detectedTone,
-          reasoning: analysis.reasoning,
-        });
-
-        // Create suggestion records linked to this message
-        const toneLabel = replyMode === "friend" ? "casual" : "professional";
-
-        const primaryId = await db.createSuggestion({
-          conversationId: input.conversationId,
-          messageId,
-          userId: ctx.user.id,
-          suggestionText: analysis.primaryReply,
-          suggestionType: "primary",
-          tone: toneLabel,
-        });
-
-        const altId = await db.createSuggestion({
-          conversationId: input.conversationId,
-          messageId,
-          userId: ctx.user.id,
-          suggestionText: analysis.alternativeReply,
-          suggestionType: "alternative",
-          tone: toneLabel,
-        });
-
-        let expertRefId: number | undefined;
-        if (analysis.expertReferral) {
-          expertRefId = await db.createSuggestion({
-            conversationId: input.conversationId,
-            messageId,
-            userId: ctx.user.id,
-            suggestionText: analysis.expertReferral,
-            suggestionType: "expert_referral",
-            tone: "professional",
-          });
-        }
-
-        return {
-          messageId,
-          analysis: {
-            contextType: analysis.contextType,
-            detectedTone: analysis.detectedTone,
-            reasoning: analysis.reasoning,
-          },
-          suggestions: [
-            { id: primaryId, type: "primary", text: analysis.primaryReply },
-            { id: altId, type: "alternative", text: analysis.alternativeReply },
-            ...(analysis.expertReferral && expertRefId ? [{ id: expertRefId, type: "expert_referral", text: analysis.expertReferral }] : []),
-          ],
-        };
-      }),
-
-    // Quick analyze (creates conversation + first message in one call)
-    analyze: protectedProcedure
-      .input(z.object({
-        inputText: z.string().min(1),
-        screenshotUrl: z.string().optional(),
-        title: z.string().optional(),
-        replyMode: z.enum(["friend", "expert"]).default("friend"),
-        buyerName: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        // Create conversation first
-        const conversationId = await db.createConversation({
-          userId: ctx.user.id,
-          title: input.buyerName 
-            ? `${input.buyerName} - ${new Date().toLocaleDateString()}`
-            : input.title || `Conversation ${new Date().toLocaleDateString()}`,
-          buyerName: input.buyerName,
-          replyMode: input.replyMode,
-        });
-
-        // Get user's knowledge base content filtered by reply mode
-        const knowledgeItems = await db.getReadyKnowledgeBaseContent(ctx.user.id, input.replyMode);
-        const knowledgeContext = knowledgeItems
-          .map(item => `[${item.type.toUpperCase()}: ${item.title}]\n${item.extractedContent}`)
-          .join("\n\n---\n\n");
-
-        // Get user profile for personalization
-        const profile = {
-          salesStyle: ctx.user.salesStyle || "consultative",
-          industry: ctx.user.industry || "general",
-          productDescription: ctx.user.productDescription || "",
-          tonePreference: ctx.user.tonePreference || "professional",
-          companyName: ctx.user.companyName || "",
-        };
-
-        // Build mode-specific instructions
-        const modeInstructions = input.replyMode === "friend" 
-          ? `FRIEND MODE PRINCIPLES:
-- You are a friendly, relatable peer who speaks like a real person texting a friend
-- You were once stuck, confused, and skeptical about online income - you found clarity
-- You are now successful and stable, calm, confident, and NOT desperate
-- You NEVER chase or convince - you understand and guide
-- Sound human, casual, warm, and supportive
-- NEVER use hype language or say "buy", "offer", or "program" unless asked
-- Share personal experience naturally
-- End most replies with a genuine question
-- Listen first, mirror their words, respond emotionally before logically`
-          : `EXPERT MODE PRINCIPLES:
-- You are a knowledgeable professional who provides clear, direct guidance
-- You speak with authority and confidence, backed by expertise
-- You focus on solutions and value, not just rapport
-- You can discuss products, services, and offers directly when relevant
-- You provide structured, actionable advice
-- You maintain professionalism while still being personable
-- You can recommend specific next steps and resources`;
-
-        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
-
-${modeInstructions}
-
-USER PROFILE:
-- Sales Style: ${profile.salesStyle}
-- Industry: ${profile.industry}
-- Product/Service: ${profile.productDescription}
-- Preferred Tone: ${profile.tonePreference}
-- Company: ${profile.companyName}
-
-${knowledgeContext ? `USER'S SALES KNOWLEDGE BASE:\n${knowledgeContext}\n\n` : ""}
-
-CONVERSATION TO ANALYZE:
-${input.inputText}
-
-Provide:
-1. CONTEXT_TYPE: One of [objection, tone_shift, referral, first_message, follow_up, general]
-2. DETECTED_TONE: The prospect's current tone/mood
-3. PRIMARY_REPLY: A natural reply in ${input.replyMode.toUpperCase()} MODE
-4. ALTERNATIVE_REPLY: A different approach (still ${input.replyMode.toUpperCase()} MODE)
-5. EXPERT_REFERRAL: If appropriate, a way to mention guidance/support
-6. REASONING: Why these replies work
-
-Format your response as JSON:
-{
-  "contextType": "...",
-  "detectedTone": "...",
-  "primaryReply": "...",
-  "alternativeReply": "...",
-  "expertReferral": "..." or null,
-  "reasoning": "Brief explanation of why these replies work"
-}`;
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are an expert sales coach. Always respond with valid JSON only." },
-            { role: "user", content: analysisPrompt },
-          ],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "conversation_analysis",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  contextType: { type: "string", enum: ["objection", "tone_shift", "referral", "first_message", "follow_up", "general"] },
-                  detectedTone: { type: "string" },
-                  primaryReply: { type: "string" },
-                  alternativeReply: { type: "string" },
-                  expertReferral: { type: ["string", "null"] },
-                  reasoning: { type: "string" },
-                },
-                required: ["contextType", "detectedTone", "primaryReply", "alternativeReply", "expertReferral", "reasoning"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
-        const analysisContent = response.choices[0]?.message?.content;
-        const analysis = JSON.parse(typeof analysisContent === 'string' ? analysisContent : '{}');
-
-        // Create first message
-        const messageId = await db.createConversationMessage({
-          conversationId,
-          userId: ctx.user.id,
-          inputText: input.inputText,
-          screenshotUrl: input.screenshotUrl,
-          analysisContext: analysis.contextType as any,
-          detectedTone: analysis.detectedTone,
-          reasoning: analysis.reasoning,
-        });
-
-        // Create suggestion records
-        const suggestionIds: number[] = [];
-        const toneLabel = input.replyMode === "friend" ? "casual" : "professional";
-
-        const primaryId = await db.createSuggestion({
-          conversationId,
-          messageId,
-          userId: ctx.user.id,
-          suggestionText: analysis.primaryReply,
-          suggestionType: "primary",
-          tone: toneLabel,
-        });
-        suggestionIds.push(primaryId);
-
-        const altId = await db.createSuggestion({
-          conversationId,
-          messageId,
-          userId: ctx.user.id,
-          suggestionText: analysis.alternativeReply,
-          suggestionType: "alternative",
-          tone: toneLabel,
-        });
-        suggestionIds.push(altId);
-
-        if (analysis.expertReferral) {
-          const refId = await db.createSuggestion({
-            conversationId,
-            messageId,
-            userId: ctx.user.id,
-            suggestionText: analysis.expertReferral,
-            suggestionType: "expert_referral",
-            tone: "professional",
-          });
-          suggestionIds.push(refId);
-        }
-
-        return {
-          conversationId,
-          messageId,
-          analysis: {
-            contextType: analysis.contextType,
-            detectedTone: analysis.detectedTone,
-            reasoning: analysis.reasoning,
-          },
-          suggestions: [
-            { id: primaryId, type: "primary", text: analysis.primaryReply },
-            { id: altId, type: "alternative", text: analysis.alternativeReply },
-            ...(analysis.expertReferral ? [{ id: suggestionIds[2], type: "expert_referral", text: analysis.expertReferral }] : []),
-          ],
-        };
-      }),
-
-    uploadScreenshot: protectedProcedure
-      .input(z.object({
-        fileBase64: z.string(),
-        fileName: z.string(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const buffer = Buffer.from(input.fileBase64, "base64");
-        const fileKey = `${ctx.user.id}/screenshots/${nanoid()}-${input.fileName}`;
-        const { url } = await storagePut(fileKey, buffer, "image/png");
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: "You are an OCR assistant. Extract all visible text from this screenshot of a conversation. Preserve the conversation structure, indicating who said what if possible. Return only the extracted text, no commentary." },
-            { role: "user", content: [
-              { type: "text", text: "Extract all text from this conversation screenshot:" },
-              { type: "image_url", image_url: { url, detail: "high" } }
-            ] },
-          ],
-        });
-
-        const ocrContent = response.choices[0]?.message?.content;
-        const extractedText = typeof ocrContent === 'string' ? ocrContent : '';
-
-        return { url, extractedText };
-      }),
-
-    // Update conversation outcome (success tracking)
-    updateOutcome: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        outcome: z.enum(["pending", "won", "lost"]),
-        outcomeNotes: z.string().optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await db.updateConversation(input.id, ctx.user.id, {
-          outcome: input.outcome,
-          outcomeNotes: input.outcomeNotes,
-        });
-        return { success: true };
-      }),
-
-    // Update conversation details
-    update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        title: z.string().optional(),
-        buyerName: z.string().optional(),
-        replyMode: z.enum(["friend", "expert"]).optional(),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const { id, ...updates } = input;
-        await db.updateConversation(id, ctx.user.id, updates);
-        return { success: true };
-      }),
-
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await db.deleteConversation(input.id, ctx.user.id);
-        return { success: true };
-      }),
-  }),
-
-  // Suggestion feedback
-  suggestion: router({
-    markUsed: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        wasUsed: z.enum(["yes", "no", "modified"]),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await db.updateSuggestionUsage(input.id, ctx.user.id, input.wasUsed);
-        return { success: true };
-      }),
-
-    feedback: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        feedback: z.enum(["helpful", "not_helpful", "neutral"]),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        await db.updateSuggestionFeedback(input.id, ctx.user.id, input.feedback);
         return { success: true };
       }),
   }),

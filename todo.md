@@ -46,3 +46,45 @@
 - [x] Change "Add Video" to "Add URL" (YouTube/Instagram support with video transcription)
 - [x] Conversation threading (follow-up messages within existing conversations)
 - [x] Success tracking (won/lost status and conversion rate analytics)
+
+## Major Rebuild (v4) - WhatsApp-Style Sales CRM
+
+### Database Schema Redesign
+- [x] Workspaces table (niche-based user profiles)
+- [x] Prospects table (buyer profiles with social links)
+- [x] Chat messages table (WhatsApp-style conversation threads)
+- [x] Update knowledge base to support deep learning storage
+
+### Workspace/Niche Management
+- [x] Create workspace with niche name
+- [x] Add user's own IG/TikTok/store URL to workspace
+- [x] Option to type niche description if no social media
+- [x] Switch between workspaces easily
+
+### WhatsApp-Style Chat UI
+- [x] Sidebar with list of prospects (like WhatsApp contacts)
+- [x] Chat thread view for each prospect
+- [x] Upload screenshots directly into chat
+- [x] AI responses appear in chat thread
+- [x] Create new chat for new prospects
+
+### Prospect Profile Analysis
+- [x] Paste prospect's Instagram URL for analysis
+- [x] Paste prospect's TikTok URL for analysis
+- [x] Paste prospect's store/website URL for analysis
+- [x] AI analyzes profile to suggest first message
+- [x] Save prospect with name and profile info
+
+### Deep Knowledge Learning
+- [x] PDF: Read entire book page by page, understand everything
+- [x] Video: Watch and understand full content (not just objections)
+- [x] Learn: sales psychology, rapport building, conversation starters, closing techniques
+- [x] Store all learned knowledge persistently
+- [x] AI continuously improves based on absorbed knowledge
+- [x] Show detailed "What I Learned" summary
+
+### AI Integration
+- [x] AI uses workspace profile (your products/niche) in responses
+- [x] AI uses all knowledge base content in conversations
+- [x] AI suggests first messages based on prospect analysis
+- [x] AI adapts responses based on conversation stage

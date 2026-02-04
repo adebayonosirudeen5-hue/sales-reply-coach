@@ -21,17 +21,17 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { MessageSquareText, Brain, History, Settings, LogOut, PanelLeft } from "lucide-react";
+import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: MessageSquareText, label: "Conversation Coach", path: "/dashboard" },
+  { icon: MessageSquare, label: "Chats", path: "/chats" },
   { icon: Brain, label: "Knowledge Base", path: "/knowledge-base" },
-  { icon: History, label: "History", path: "/history" },
-  { icon: Settings, label: "Settings", path: "/settings" },
+  { icon: Briefcase, label: "Workspaces", path: "/workspaces" },
+  { icon: BarChart3, label: "Analytics", path: "/analytics" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -64,7 +64,7 @@ export default function DashboardLayout({
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-6">
             <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-              <MessageSquareText className="h-8 w-8 text-primary" />
+              <MessageSquare className="h-8 w-8 text-primary" />
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-center">
               Sign in to continue
@@ -117,7 +117,7 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
+  const activeMenuItem = menuItems.find(item => location.startsWith(item.path));
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -175,7 +175,7 @@ function DashboardLayoutContent({
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <MessageSquareText className="h-5 w-5 text-primary shrink-0" />
+                  <MessageSquare className="h-5 w-5 text-primary shrink-0" />
                   <span className="font-semibold tracking-tight truncate">
                     Sales Reply Coach
                   </span>
@@ -187,7 +187,7 @@ function DashboardLayoutContent({
           <SidebarContent className="gap-0">
             <SidebarMenu className="px-2 py-1">
               {menuItems.map(item => {
-                const isActive = location === item.path;
+                const isActive = location.startsWith(item.path);
                 return (
                   <SidebarMenuItem key={item.path}>
                     <SidebarMenuButton
@@ -263,7 +263,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="flex-1">{children}</main>
       </SidebarInset>
     </>
   );

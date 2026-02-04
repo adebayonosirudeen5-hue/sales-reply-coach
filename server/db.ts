@@ -1,10 +1,19 @@
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, 
   users, 
   knowledgeBaseItems, 
   InsertKnowledgeBaseItem,
+  workspaces,
+  InsertWorkspace,
+  prospects,
+  InsertProspect,
+  chatMessages,
+  InsertChatMessage,
+  aiSuggestions,
+  InsertAiSuggestion,
+  // Legacy tables
   conversations,
   InsertConversation,
   conversationMessages,
@@ -100,17 +109,232 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function updateUserProfile(userId: number, profile: {
-  salesStyle?: string | null;
-  industry?: string | null;
-  productDescription?: string | null;
-  tonePreference?: string | null;
-  companyName?: string | null;
-}) {
+// ============ WORKSPACE QUERIES ============
+
+export async function createWorkspace(workspace: InsertWorkspace) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  await db.update(users).set(profile).where(eq(users.id, userId));
+  const result = await db.insert(workspaces).values(workspace);
+  return result[0].insertId;
+}
+
+export async function getWorkspaces(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(workspaces)
+    .where(eq(workspaces.userId, userId))
+    .orderBy(desc(workspaces.createdAt));
+}
+
+export async function getWorkspace(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.select().from(workspaces)
+    .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function getActiveWorkspace(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.select().from(workspaces)
+    .where(and(eq(workspaces.userId, userId), eq(workspaces.isActive, true)))
+    .limit(1);
+  
+  // If no active workspace, return the first one
+  if (!result[0]) {
+    const firstWorkspace = await db.select().from(workspaces)
+      .where(eq(workspaces.userId, userId))
+      .orderBy(workspaces.createdAt)
+      .limit(1);
+    return firstWorkspace[0];
+  }
+  return result[0];
+}
+
+export async function updateWorkspace(id: number, userId: number, updates: Partial<InsertWorkspace>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.update(workspaces)
+    .set(updates)
+    .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)));
+}
+
+export async function setActiveWorkspace(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // First, deactivate all workspaces for this user
+  await db.update(workspaces)
+    .set({ isActive: false })
+    .where(eq(workspaces.userId, userId));
+  
+  // Then activate the selected one
+  await db.update(workspaces)
+    .set({ isActive: true })
+    .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)));
+}
+
+export async function deleteWorkspace(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete associated prospects and their messages first
+  const workspaceProspects = await db.select({ id: prospects.id }).from(prospects)
+    .where(eq(prospects.workspaceId, id));
+  
+  for (const prospect of workspaceProspects) {
+    await db.delete(chatMessages).where(eq(chatMessages.prospectId, prospect.id));
+    await db.delete(aiSuggestions).where(eq(aiSuggestions.prospectId, prospect.id));
+  }
+  
+  await db.delete(prospects).where(eq(prospects.workspaceId, id));
+  await db.delete(workspaces)
+    .where(and(eq(workspaces.id, id), eq(workspaces.userId, userId)));
+}
+
+// ============ PROSPECT QUERIES ============
+
+export async function createProspect(prospect: InsertProspect) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.insert(prospects).values(prospect);
+  return result[0].insertId;
+}
+
+export async function getProspects(workspaceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(prospects)
+    .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.userId, userId)))
+    .orderBy(desc(prospects.lastMessageAt), desc(prospects.createdAt));
+}
+
+export async function getProspect(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.select().from(prospects)
+    .where(and(eq(prospects.id, id), eq(prospects.userId, userId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function updateProspect(id: number, userId: number, updates: Partial<InsertProspect>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.update(prospects)
+    .set(updates)
+    .where(and(eq(prospects.id, id), eq(prospects.userId, userId)));
+}
+
+export async function deleteProspect(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete associated messages and suggestions
+  await db.delete(chatMessages).where(eq(chatMessages.prospectId, id));
+  await db.delete(aiSuggestions).where(eq(aiSuggestions.prospectId, id));
+  
+  await db.delete(prospects)
+    .where(and(eq(prospects.id, id), eq(prospects.userId, userId)));
+}
+
+// ============ CHAT MESSAGE QUERIES ============
+
+export async function createChatMessage(message: InsertChatMessage) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.insert(chatMessages).values(message);
+  
+  // Update prospect's lastMessageAt
+  await db.update(prospects)
+    .set({ lastMessageAt: new Date() })
+    .where(eq(prospects.id, message.prospectId));
+  
+  return result[0].insertId;
+}
+
+export async function getChatMessages(prospectId: number, userId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(chatMessages)
+    .where(and(eq(chatMessages.prospectId, prospectId), eq(chatMessages.userId, userId)))
+    .orderBy(chatMessages.createdAt)
+    .limit(limit);
+}
+
+export async function getChatMessage(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.select().from(chatMessages)
+    .where(and(eq(chatMessages.id, id), eq(chatMessages.userId, userId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function getConversationContext(prospectId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Get all messages to build full conversation context
+  const messages = await db.select().from(chatMessages)
+    .where(and(eq(chatMessages.prospectId, prospectId), eq(chatMessages.userId, userId)))
+    .orderBy(chatMessages.createdAt);
+
+  return messages.map(m => {
+    const prefix = m.direction === 'inbound' ? 'Prospect' : 'You';
+    return `${prefix}: ${m.content}`;
+  }).join("\n\n");
+}
+
+// ============ AI SUGGESTION QUERIES ============
+
+export async function createAiSuggestion(suggestion: InsertAiSuggestion) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.insert(aiSuggestions).values(suggestion);
+  return result[0].insertId;
+}
+
+export async function getAiSuggestions(messageId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(aiSuggestions)
+    .where(and(eq(aiSuggestions.messageId, messageId), eq(aiSuggestions.userId, userId)))
+    .orderBy(aiSuggestions.createdAt);
+}
+
+export async function updateAiSuggestionUsage(id: number, userId: number, wasUsed: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.update(aiSuggestions)
+    .set({ wasUsed })
+    .where(and(eq(aiSuggestions.id, id), eq(aiSuggestions.userId, userId)));
+}
+
+export async function updateAiSuggestionFeedback(id: number, userId: number, feedback: "helpful" | "not_helpful") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.update(aiSuggestions)
+    .set({ feedback })
+    .where(and(eq(aiSuggestions.id, id), eq(aiSuggestions.userId, userId)));
 }
 
 // ============ KNOWLEDGE BASE QUERIES ============
@@ -123,10 +347,20 @@ export async function createKnowledgeBaseItem(item: InsertKnowledgeBaseItem) {
   return result[0].insertId;
 }
 
-export async function getKnowledgeBaseItems(userId: number) {
+export async function getKnowledgeBaseItems(userId: number, workspaceId?: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  if (workspaceId) {
+    return db.select().from(knowledgeBaseItems)
+      .where(and(
+        eq(knowledgeBaseItems.userId, userId),
+        eq(knowledgeBaseItems.workspaceId, workspaceId)
+      ))
+      .orderBy(desc(knowledgeBaseItems.createdAt));
+  }
+
+  // Get global items (no workspace) and workspace-specific items
   return db.select().from(knowledgeBaseItems)
     .where(eq(knowledgeBaseItems.userId, userId))
     .orderBy(desc(knowledgeBaseItems.createdAt));
@@ -142,15 +376,7 @@ export async function getKnowledgeBaseItem(id: number, userId: number) {
   return result[0];
 }
 
-export async function updateKnowledgeBaseItem(id: number, userId: number, updates: {
-  extractedContent?: string | null;
-  learnedSummary?: string | null;
-  objectionsHandled?: string | null;
-  languageStyles?: string | null;
-  brainType?: "friend" | "expert" | "both";
-  platform?: string | null;
-  status?: "pending" | "processing" | "ready" | "failed";
-}) {
+export async function updateKnowledgeBaseItem(id: number, userId: number, updates: Partial<InsertKnowledgeBaseItem>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -167,31 +393,86 @@ export async function deleteKnowledgeBaseItem(id: number, userId: number) {
     .where(and(eq(knowledgeBaseItems.id, id), eq(knowledgeBaseItems.userId, userId)));
 }
 
-export async function getReadyKnowledgeBaseContent(userId: number, brainType?: "friend" | "expert") {
+export async function getReadyKnowledgeBaseContent(userId: number, brainType?: "friend" | "expert", workspaceId?: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const baseQuery = db.select({
-    id: knowledgeBaseItems.id,
-    type: knowledgeBaseItems.type,
-    title: knowledgeBaseItems.title,
-    extractedContent: knowledgeBaseItems.extractedContent,
-    brainType: knowledgeBaseItems.brainType,
-  }).from(knowledgeBaseItems)
+  const results = await db.select().from(knowledgeBaseItems)
     .where(and(
       eq(knowledgeBaseItems.userId, userId),
       eq(knowledgeBaseItems.status, "ready")
     ));
-
-  const results = await baseQuery;
   
-  if (brainType) {
-    return results.filter(item => item.brainType === brainType || item.brainType === "both");
+  let filtered = results;
+  
+  // Filter by workspace if provided (include global items too)
+  if (workspaceId) {
+    filtered = filtered.filter(item => 
+      item.workspaceId === workspaceId || item.workspaceId === null
+    );
   }
-  return results;
+  
+  // Filter by brain type
+  if (brainType) {
+    filtered = filtered.filter(item => 
+      item.brainType === brainType || item.brainType === "both"
+    );
+  }
+  
+  return filtered;
 }
 
-// ============ CONVERSATION QUERIES ============
+// ============ ANALYTICS QUERIES ============
+
+export async function getProspectStats(userId: number, workspaceId?: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  let allProspects;
+  if (workspaceId) {
+    allProspects = await db.select().from(prospects)
+      .where(and(eq(prospects.userId, userId), eq(prospects.workspaceId, workspaceId)));
+  } else {
+    allProspects = await db.select().from(prospects)
+      .where(eq(prospects.userId, userId));
+  }
+
+  const total = allProspects.length;
+  const active = allProspects.filter(p => p.outcome === "active").length;
+  const won = allProspects.filter(p => p.outcome === "won").length;
+  const lost = allProspects.filter(p => p.outcome === "lost").length;
+  const ghosted = allProspects.filter(p => p.outcome === "ghosted").length;
+
+  // Stats by reply mode
+  const friendProspects = allProspects.filter(p => p.replyMode === "friend");
+  const expertProspects = allProspects.filter(p => p.replyMode === "expert");
+
+  const friendWon = friendProspects.filter(p => p.outcome === "won").length;
+  const friendClosed = friendProspects.filter(p => p.outcome !== "active").length;
+  const expertWon = expertProspects.filter(p => p.outcome === "won").length;
+  const expertClosed = expertProspects.filter(p => p.outcome !== "active").length;
+
+  return {
+    total,
+    active,
+    won,
+    lost,
+    ghosted,
+    conversionRate: (won + lost) > 0 ? Math.round((won / (won + lost)) * 100) : 0,
+    friendMode: {
+      total: friendProspects.length,
+      won: friendWon,
+      conversionRate: friendClosed > 0 ? Math.round((friendWon / friendClosed) * 100) : 0,
+    },
+    expertMode: {
+      total: expertProspects.length,
+      won: expertWon,
+      conversionRate: expertClosed > 0 ? Math.round((expertWon / expertClosed) * 100) : 0,
+    },
+  };
+}
+
+// ============ LEGACY QUERIES (for backward compatibility) ============
 
 export async function createConversation(conv: InsertConversation) {
   const db = await getDb();
@@ -219,166 +500,4 @@ export async function getConversation(id: number, userId: number) {
     .where(and(eq(conversations.id, id), eq(conversations.userId, userId)))
     .limit(1);
   return result[0];
-}
-
-export async function updateConversation(id: number, userId: number, updates: {
-  title?: string | null;
-  buyerName?: string | null;
-  replyMode?: "friend" | "expert";
-  outcome?: "pending" | "won" | "lost";
-  outcomeNotes?: string | null;
-}) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  await db.update(conversations)
-    .set(updates)
-    .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
-}
-
-export async function deleteConversation(id: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  // Delete associated messages first
-  await db.delete(conversationMessages)
-    .where(and(eq(conversationMessages.conversationId, id), eq(conversationMessages.userId, userId)));
-  
-  // Delete associated suggestions
-  await db.delete(suggestions)
-    .where(and(eq(suggestions.conversationId, id), eq(suggestions.userId, userId)));
-  
-  await db.delete(conversations)
-    .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
-}
-
-// ============ CONVERSATION MESSAGE QUERIES ============
-
-export async function createConversationMessage(msg: InsertConversationMessage) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const result = await db.insert(conversationMessages).values(msg);
-  return result[0].insertId;
-}
-
-export async function getConversationMessages(conversationId: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  return db.select().from(conversationMessages)
-    .where(and(
-      eq(conversationMessages.conversationId, conversationId),
-      eq(conversationMessages.userId, userId)
-    ))
-    .orderBy(conversationMessages.createdAt);
-}
-
-export async function getConversationThread(conversationId: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  // Get all messages in the conversation to build context
-  const messages = await db.select().from(conversationMessages)
-    .where(and(
-      eq(conversationMessages.conversationId, conversationId),
-      eq(conversationMessages.userId, userId)
-    ))
-    .orderBy(conversationMessages.createdAt);
-
-  return messages.map(m => m.inputText).join("\n\n---\n\n");
-}
-
-// ============ SUGGESTION QUERIES ============
-
-export async function createSuggestion(sug: InsertSuggestion) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const result = await db.insert(suggestions).values(sug);
-  return result[0].insertId;
-}
-
-export async function getSuggestionsForConversation(conversationId: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  return db.select().from(suggestions)
-    .where(and(
-      eq(suggestions.conversationId, conversationId),
-      eq(suggestions.userId, userId)
-    ))
-    .orderBy(suggestions.createdAt);
-}
-
-export async function getSuggestionsForMessage(messageId: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  return db.select().from(suggestions)
-    .where(and(
-      eq(suggestions.messageId, messageId),
-      eq(suggestions.userId, userId)
-    ))
-    .orderBy(suggestions.createdAt);
-}
-
-export async function updateSuggestionUsage(id: number, userId: number, wasUsed: "yes" | "no" | "modified") {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  await db.update(suggestions)
-    .set({ wasUsed })
-    .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId)));
-}
-
-export async function updateSuggestionFeedback(id: number, userId: number, feedback: "helpful" | "not_helpful" | "neutral") {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  await db.update(suggestions)
-    .set({ feedback })
-    .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId)));
-}
-
-// ============ ANALYTICS QUERIES ============
-
-export async function getConversationStats(userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const allConversations = await db.select().from(conversations)
-    .where(eq(conversations.userId, userId));
-
-  const total = allConversations.length;
-  const won = allConversations.filter(c => c.outcome === "won").length;
-  const lost = allConversations.filter(c => c.outcome === "lost").length;
-  const pending = allConversations.filter(c => c.outcome === "pending").length;
-
-  // Stats by reply mode
-  const friendConvs = allConversations.filter(c => c.replyMode === "friend");
-  const expertConvs = allConversations.filter(c => c.replyMode === "expert");
-
-  const friendWon = friendConvs.filter(c => c.outcome === "won").length;
-  const friendTotal = friendConvs.filter(c => c.outcome !== "pending").length;
-  const expertWon = expertConvs.filter(c => c.outcome === "won").length;
-  const expertTotal = expertConvs.filter(c => c.outcome !== "pending").length;
-
-  return {
-    total,
-    won,
-    lost,
-    pending,
-    conversionRate: total > 0 ? Math.round((won / (won + lost || 1)) * 100) : 0,
-    friendMode: {
-      total: friendConvs.length,
-      won: friendWon,
-      conversionRate: friendTotal > 0 ? Math.round((friendWon / friendTotal) * 100) : 0,
-    },
-    expertMode: {
-      total: expertConvs.length,
-      won: expertWon,
-      conversionRate: expertTotal > 0 ? Math.round((expertWon / expertTotal) * 100) : 0,
-    },
-  };
 }

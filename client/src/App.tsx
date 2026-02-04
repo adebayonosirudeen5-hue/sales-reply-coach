@@ -5,20 +5,21 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
-import Dashboard from "./pages/Dashboard";
+import Chats from "./pages/Chats";
 import KnowledgeBase from "./pages/KnowledgeBase";
-import History from "./pages/History";
-import Settings from "./pages/Settings";
+import Workspaces from "./pages/Workspaces";
+import Analytics from "./pages/Analytics";
 import DashboardLayout from "./components/DashboardLayout";
 
 function AuthenticatedRoutes() {
   return (
     <DashboardLayout>
       <Switch>
-        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/chats" component={Chats} />
+        <Route path="/chats/:prospectId" component={Chats} />
         <Route path="/knowledge-base" component={KnowledgeBase} />
-        <Route path="/history" component={History} />
-        <Route path="/settings" component={Settings} />
+        <Route path="/workspaces" component={Workspaces} />
+        <Route path="/analytics" component={Analytics} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
@@ -29,10 +30,11 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
-      <Route path="/dashboard" component={AuthenticatedRoutes} />
+      <Route path="/chats" component={AuthenticatedRoutes} />
+      <Route path="/chats/:prospectId" component={AuthenticatedRoutes} />
       <Route path="/knowledge-base" component={AuthenticatedRoutes} />
-      <Route path="/history" component={AuthenticatedRoutes} />
-      <Route path="/settings" component={AuthenticatedRoutes} />
+      <Route path="/workspaces" component={AuthenticatedRoutes} />
+      <Route path="/analytics" component={AuthenticatedRoutes} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

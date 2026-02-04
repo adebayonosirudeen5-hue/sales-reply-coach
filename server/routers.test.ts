@@ -4,34 +4,51 @@ import type { TrpcContext } from "./_core/context";
 
 // Mock the database functions
 vi.mock("./db", () => ({
-  updateUserProfile: vi.fn().mockResolvedValue(undefined),
-  getKnowledgeBaseItems: vi.fn().mockResolvedValue([]),
-  createKnowledgeBaseItem: vi.fn().mockResolvedValue(1),
-  getKnowledgeBaseItem: vi.fn().mockResolvedValue(null),
-  updateKnowledgeBaseItem: vi.fn().mockResolvedValue(undefined),
-  deleteKnowledgeBaseItem: vi.fn().mockResolvedValue(undefined),
-  getReadyKnowledgeBaseContent: vi.fn().mockResolvedValue([]),
-  createConversation: vi.fn().mockResolvedValue(1),
-  getConversations: vi.fn().mockResolvedValue([]),
-  getConversation: vi.fn().mockResolvedValue(null),
-  updateConversation: vi.fn().mockResolvedValue(undefined),
-  deleteConversation: vi.fn().mockResolvedValue(undefined),
-  createConversationMessage: vi.fn().mockResolvedValue(1),
-  getConversationMessages: vi.fn().mockResolvedValue([]),
-  getConversationThread: vi.fn().mockResolvedValue(""),
-  getConversationStats: vi.fn().mockResolvedValue({
+  // Workspace functions
+  getWorkspaces: vi.fn().mockResolvedValue([]),
+  getActiveWorkspace: vi.fn().mockResolvedValue({ id: 1, name: "Test Workspace", isActive: true }),
+  getWorkspace: vi.fn().mockResolvedValue({ id: 1, name: "Test Workspace" }),
+  createWorkspace: vi.fn().mockResolvedValue(1),
+  updateWorkspace: vi.fn().mockResolvedValue(undefined),
+  deleteWorkspace: vi.fn().mockResolvedValue(undefined),
+  setActiveWorkspace: vi.fn().mockResolvedValue(undefined),
+  
+  // Prospect functions
+  getProspects: vi.fn().mockResolvedValue([]),
+  getProspect: vi.fn().mockResolvedValue({ id: 1, name: "Test Prospect", workspaceId: 1 }),
+  createProspect: vi.fn().mockResolvedValue(1),
+  updateProspect: vi.fn().mockResolvedValue(undefined),
+  deleteProspect: vi.fn().mockResolvedValue(undefined),
+  getProspectStats: vi.fn().mockResolvedValue({
     total: 10,
     won: 5,
     lost: 3,
-    pending: 2,
+    ghosted: 1,
+    active: 1,
     conversionRate: 62.5,
-    friendMode: { total: 6, won: 3, lost: 2, conversionRate: 60 },
-    expertMode: { total: 4, won: 2, lost: 1, conversionRate: 66.7 },
+    friendMode: { total: 6, won: 3, conversionRate: 50 },
+    expertMode: { total: 4, won: 2, conversionRate: 50 },
   }),
-  createSuggestion: vi.fn().mockResolvedValue(1),
-  getSuggestionsForConversation: vi.fn().mockResolvedValue([]),
-  updateSuggestionUsage: vi.fn().mockResolvedValue(undefined),
-  updateSuggestionFeedback: vi.fn().mockResolvedValue(undefined),
+  
+  // Chat message functions
+  getChatMessages: vi.fn().mockResolvedValue([]),
+  createChatMessage: vi.fn().mockResolvedValue(1),
+  getConversationThread: vi.fn().mockResolvedValue(""),
+  
+  // AI suggestion functions
+  createAiSuggestion: vi.fn().mockResolvedValue(1),
+  getAiSuggestions: vi.fn().mockResolvedValue([]),
+  markSuggestionUsed: vi.fn().mockResolvedValue(undefined),
+  
+  // Knowledge base functions
+  getKnowledgeBaseItems: vi.fn().mockResolvedValue([]),
+  getKnowledgeBaseItem: vi.fn().mockResolvedValue(null),
+  createKnowledgeBaseItem: vi.fn().mockResolvedValue(1),
+  updateKnowledgeBaseItem: vi.fn().mockResolvedValue(undefined),
+  deleteKnowledgeBaseItem: vi.fn().mockResolvedValue(undefined),
+  getReadyKnowledgeBaseContent: vi.fn().mockResolvedValue([]),
+  getConversationContext: vi.fn().mockResolvedValue(""),
+  updateAiSuggestionUsage: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock storage
@@ -45,12 +62,14 @@ vi.mock("./_core/llm", () => ({
     choices: [{
       message: {
         content: JSON.stringify({
-          contextType: "general",
+          conversationStage: "first_contact",
           detectedTone: "curious",
           primaryReply: "Thanks for reaching out! I'd love to hear more about what you're looking for.",
           alternativeReply: "Hey! Great to connect. What brings you here today?",
-          expertReferral: null,
-          reasoning: "This is a first contact message, so we keep it warm and open-ended."
+          softReply: "Hi there! Nice to meet you.",
+          whyThisWorks: "This keeps it warm and open-ended.",
+          pushyWarning: null,
+          reasoning: "This is a first contact message."
         })
       }
     }]
@@ -70,11 +89,6 @@ function createAuthContext(): TrpcContext {
     createdAt: new Date(),
     updatedAt: new Date(),
     lastSignedIn: new Date(),
-    salesStyle: "consultative",
-    industry: "tech",
-    productDescription: "SaaS product",
-    tonePreference: "professional",
-    companyName: "Test Co",
   };
 
   return {
@@ -124,45 +138,197 @@ describe("auth.me", () => {
   });
 });
 
-describe("profile", () => {
-  it("returns profile data for authenticated user", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const result = await caller.profile.get();
-
-    expect(result).toBeDefined();
-    expect(result.salesStyle).toBe("consultative");
-    expect(result.industry).toBe("tech");
-    expect(result.tonePreference).toBe("professional");
+describe("workspace", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("updates profile successfully", async () => {
+  it("lists workspaces for authenticated user", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const db = await import("./db");
 
-    const result = await caller.profile.update({
-      salesStyle: "friendly",
-      industry: "health",
-      tonePreference: "warm",
+    await caller.workspace.list();
+
+    expect(db.getWorkspaces).toHaveBeenCalledWith(1);
+  });
+
+  it("gets active workspace", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.workspace.getActive();
+
+    expect(db.getActiveWorkspace).toHaveBeenCalledWith(1);
+    expect(result?.name).toBe("Test Workspace");
+  });
+
+  it("creates a new workspace", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.workspace.create({
+      name: "Digital Marketing",
+      nicheDescription: "Selling digital products",
+      defaultReplyMode: "friend",
     });
 
     expect(result.success).toBe(true);
-    expect(db.updateUserProfile).toHaveBeenCalledWith(1, {
-      salesStyle: "friendly",
-      industry: "health",
-      tonePreference: "warm",
-    });
+    expect(result.id).toBe(1);
+    expect(db.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 1,
+      name: "Digital Marketing",
+      nicheDescription: "Selling digital products",
+    }));
   });
 
-  it("rejects profile update for unauthenticated user", async () => {
-    const ctx = createUnauthContext();
+  it("sets workspace as active", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.workspace.setActive({ id: 1 });
+
+    expect(result.success).toBe(true);
+    expect(db.setActiveWorkspace).toHaveBeenCalledWith(1, 1);
+  });
+
+  it("deletes workspace", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.workspace.delete({ id: 1 });
+
+    expect(result.success).toBe(true);
+    expect(db.deleteWorkspace).toHaveBeenCalledWith(1, 1);
+  });
+});
+
+describe("prospect", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("lists prospects for a workspace", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    await caller.prospect.list({ workspaceId: 1 });
+
+    expect(db.getProspects).toHaveBeenCalledWith(1, 1);
+  });
+
+  it("creates a new prospect", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.prospect.create({
+      workspaceId: 1,
+      name: "John Doe",
+      instagramUrl: "https://instagram.com/johndoe",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.id).toBe(1);
+    expect(db.createProspect).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 1,
+      workspaceId: 1,
+      name: "John Doe",
+    }));
+  });
+
+  it("gets prospect stats", async () => {
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
-    await expect(
-      caller.profile.update({ salesStyle: "friendly" })
-    ).rejects.toThrow();
+    const result = await caller.prospect.stats({ workspaceId: 1 });
+
+    expect(result).toBeDefined();
+    expect(result.total).toBe(10);
+    expect(result.won).toBe(5);
+    expect(result.conversionRate).toBe(62.5);
+  });
+
+  it("updates prospect", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.prospect.update({
+      id: 1,
+      name: "Jane Doe",
+      outcome: "won",
+    });
+
+    expect(result.success).toBe(true);
+    expect(db.updateProspect).toHaveBeenCalledWith(1, 1, expect.objectContaining({
+      name: "Jane Doe",
+      outcome: "won",
+    }));
+  });
+
+  it("deletes prospect", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.prospect.delete({ id: 1 });
+
+    expect(result.success).toBe(true);
+    expect(db.deleteProspect).toHaveBeenCalledWith(1, 1);
+  });
+});
+
+describe("chat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("gets messages for a prospect", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    await caller.chat.getMessages({ prospectId: 1 });
+
+    expect(db.getChatMessages).toHaveBeenCalledWith(1, 1);
+  });
+
+  it("sends inbound message and gets AI suggestions", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+
+    const result = await caller.chat.sendInbound({
+      prospectId: 1,
+      content: "Hey, I saw your post about the product. How much does it cost?",
+      replyMode: "friend",
+    });
+
+    expect(result).toBeDefined();
+    expect(result.messageId).toBe(1);
+    expect(result.suggestions).toBeDefined();
+    expect(result.suggestions.length).toBe(3); // primary, alternative, soft
+  });
+
+  it("sends outbound message", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.chat.sendOutbound({
+      prospectId: 1,
+      content: "Thanks for reaching out!",
+      suggestionId: 1,
+      suggestionType: "primary",
+    });
+
+    expect(result.success).toBe(true);
+    expect(db.createChatMessage).toHaveBeenCalled();
   });
 });
 
@@ -176,9 +342,9 @@ describe("knowledgeBase", () => {
     const caller = appRouter.createCaller(ctx);
     const db = await import("./db");
 
-    await caller.knowledgeBase.list();
+    await caller.knowledgeBase.list({});
 
-    expect(db.getKnowledgeBaseItems).toHaveBeenCalledWith(1);
+    expect(db.getKnowledgeBaseItems).toHaveBeenCalledWith(1, undefined);
   });
 
   it("adds URL to knowledge base", async () => {
@@ -194,14 +360,14 @@ describe("knowledgeBase", () => {
     expect(result.success).toBe(true);
     expect(result.id).toBe(1);
     expect(result.platform).toBe("youtube");
-    expect(db.createKnowledgeBaseItem).toHaveBeenCalledWith({
+    expect(db.createKnowledgeBaseItem).toHaveBeenCalledWith(expect.objectContaining({
       userId: 1,
       type: "url",
       title: "Sales Training Video",
       sourceUrl: "https://youtube.com/watch?v=abc123",
       platform: "youtube",
       status: "pending",
-    });
+    }));
   });
 
   it("detects Instagram platform from URL", async () => {
@@ -243,137 +409,5 @@ describe("knowledgeBase", () => {
 
     expect(result.success).toBe(true);
     expect(db.deleteKnowledgeBaseItem).toHaveBeenCalledWith(1, 1);
-  });
-});
-
-describe("conversation", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("lists conversations for authenticated user", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-    const db = await import("./db");
-
-    await caller.conversation.list();
-
-    expect(db.getConversations).toHaveBeenCalledWith(1);
-  });
-
-  it("analyzes conversation and returns suggestions", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const result = await caller.conversation.analyze({
-      inputText: "Hey, I saw your post about the product. How much does it cost?",
-      replyMode: "friend",
-    });
-
-    expect(result).toBeDefined();
-    expect(result.conversationId).toBe(1);
-    expect(result.messageId).toBe(1);
-    expect(result.analysis).toBeDefined();
-    expect(result.analysis.contextType).toBe("general");
-    expect(result.suggestions).toHaveLength(2); // primary + alternative
-    expect(result.suggestions[0].type).toBe("primary");
-  });
-
-  it("requires input text for analysis", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-
-    await expect(
-      caller.conversation.analyze({ inputText: "" })
-    ).rejects.toThrow();
-  });
-
-  it("gets conversation stats", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-
-    const result = await caller.conversation.stats();
-
-    expect(result).toBeDefined();
-    expect(result.total).toBe(10);
-    expect(result.won).toBe(5);
-    expect(result.conversionRate).toBe(62.5);
-    expect(result.friendMode.conversionRate).toBe(60);
-    expect(result.expertMode.conversionRate).toBe(66.7);
-  });
-
-  it("updates conversation outcome", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-    const db = await import("./db");
-
-    const result = await caller.conversation.updateOutcome({
-      id: 1,
-      outcome: "won",
-      outcomeNotes: "Closed the deal!",
-    });
-
-    expect(result.success).toBe(true);
-    expect(db.updateConversation).toHaveBeenCalledWith(1, 1, {
-      outcome: "won",
-      outcomeNotes: "Closed the deal!",
-    });
-  });
-
-  it("deletes conversation and associated suggestions", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-    const db = await import("./db");
-
-    const result = await caller.conversation.delete({ id: 1 });
-
-    expect(result.success).toBe(true);
-    expect(db.deleteConversation).toHaveBeenCalledWith(1, 1);
-  });
-});
-
-describe("suggestion", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("marks suggestion as used", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-    const db = await import("./db");
-
-    const result = await caller.suggestion.markUsed({
-      id: 1,
-      wasUsed: "yes",
-    });
-
-    expect(result.success).toBe(true);
-    expect(db.updateSuggestionUsage).toHaveBeenCalledWith(1, 1, "yes");
-  });
-
-  it("records suggestion feedback", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-    const db = await import("./db");
-
-    const result = await caller.suggestion.feedback({
-      id: 1,
-      feedback: "helpful",
-    });
-
-    expect(result.success).toBe(true);
-    expect(db.updateSuggestionFeedback).toHaveBeenCalledWith(1, 1, "helpful");
-  });
-
-  it("validates feedback values", async () => {
-    const ctx = createAuthContext();
-    const caller = appRouter.createCaller(ctx);
-
-    await expect(
-      caller.suggestion.feedback({
-        id: 1,
-        feedback: "invalid" as any,
-      })
-    ).rejects.toThrow();
   });
 });

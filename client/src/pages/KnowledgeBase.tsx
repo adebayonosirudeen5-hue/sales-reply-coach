@@ -42,7 +42,7 @@ export default function KnowledgeBase() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const utils = trpc.useUtils();
-  const { data: items, isLoading } = trpc.knowledgeBase.list.useQuery();
+  const { data: items, isLoading } = trpc.knowledgeBase.list.useQuery({});
 
   const addUrl = trpc.knowledgeBase.addUrl.useMutation({
     onSuccess: (data) => {
@@ -411,7 +411,7 @@ export default function KnowledgeBase() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0 flex-1 flex flex-col">
-                {(item.type === "url" || item.type === "video") && (
+                {(item.type === "url") && (
                   <a
                     href={item.sourceUrl}
                     target="_blank"
@@ -424,7 +424,7 @@ export default function KnowledgeBase() {
                 )}
 
                 {/* What I Learned Summary - Only show for ready items */}
-                {item.status === "ready" && item.learnedSummary && (
+                {item.status === "ready" && item.comprehensiveSummary && (
                   <Collapsible 
                     open={expandedItems.has(item.id)}
                     onOpenChange={() => toggleExpanded(item.id)}
@@ -443,19 +443,19 @@ export default function KnowledgeBase() {
                       {/* Summary */}
                       <div className="bg-muted/50 rounded-lg p-3 space-y-2">
                         <p className="text-xs text-muted-foreground leading-relaxed">
-                          {item.learnedSummary}
+                          {item.comprehensiveSummary}
                         </p>
                       </div>
 
                       {/* Objections Handled */}
-                      {item.objectionsHandled && (
+                      {item.objectionFrameworks && (
                         <div className="space-y-1">
                           <p className="text-xs font-medium flex items-center gap-1">
                             <MessageCircle className="h-3 w-3 text-orange-500" />
                             Objections this helps handle:
                           </p>
                           <div className="flex flex-wrap gap-1">
-                            {item.objectionsHandled.split(",").map((obj, i) => (
+                            {item.objectionFrameworks?.split(",").map((obj: string, i: number) => (
                               <Badge key={i} variant="outline" className="text-xs bg-orange-50 text-orange-700 border-orange-200">
                                 {obj.trim()}
                               </Badge>
@@ -465,14 +465,14 @@ export default function KnowledgeBase() {
                       )}
 
                       {/* Language Styles */}
-                      {item.languageStyles && (
+                      {item.languagePatterns && (
                         <div className="space-y-1">
                           <p className="text-xs font-medium flex items-center gap-1">
                             <Sparkles className="h-3 w-3 text-purple-500" />
-                            Language styles detected:
+                            Language patterns detected:
                           </p>
                           <div className="flex flex-wrap gap-1">
-                            {item.languageStyles.split(",").map((style, i) => (
+                            {item.languagePatterns?.split(",").map((style: string, i: number) => (
                               <Badge key={i} variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">
                                 {style.trim()}
                               </Badge>
