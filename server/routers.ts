@@ -661,6 +661,24 @@ Provide a JSON response with:
           processingProgress: 10,
         });
 
+        // Helper function to call LLM with retry logic
+        async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetries = 2): Promise<ReturnType<typeof invokeLLM>> {
+          let lastError: Error | null = null;
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+              return await invokeLLM(params);
+            } catch (error) {
+              lastError = error instanceof Error ? error : new Error(String(error));
+              console.error(`LLM call attempt ${attempt + 1} failed:`, lastError.message);
+              if (attempt < maxRetries) {
+                // Wait before retry (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+              }
+            }
+          }
+          throw lastError || new Error("LLM call failed after retries");
+        }
+
         try {
           let fullContent = "";
 
@@ -668,60 +686,49 @@ Provide a JSON response with:
           if (item.type === "url") {
             const platform = item.platform || detectPlatform(item.sourceUrl);
             
-            const extractResponse = await invokeLLM({
+            const extractResponse = await callLLMWithRetry({
               messages: [
                 { 
                   role: "system", 
-                  content: `You are a comprehensive content analyzer. Extract EVERYTHING from this ${platform} content - every technique, every phrase, every insight. Read it as if you're studying for an exam and need to remember every detail.` 
+                  content: `You are a content analyzer. Extract key insights from this ${platform} content.` 
                 },
                 { 
                   role: "user", 
-                  content: `Analyze this ${platform} content completely:
+                  content: `Analyze this ${platform} content:
 Title: ${item.title}
 URL: ${item.sourceUrl}
 
-Extract EVERYTHING you can learn from this content. Include:
-- All sales techniques and methodologies
-- Every specific phrase, script, or word choice
-- All objection handling approaches
-- Conversation frameworks and patterns
-- Psychology principles used
-- Rapport building techniques
-- Trust building strategies
+Extract the key learnings including:
+- Sales techniques and methodologies
+- Specific phrases and word choices
+- Objection handling approaches
+- Conversation frameworks
+- Psychology principles
+- Rapport and trust building techniques
 - Closing techniques
-- Any unique insights or strategies
-- Emotional triggers and responses
-- Language patterns
-
-Be comprehensive - this is going into a knowledge base that will be used to help with real sales conversations.` 
+- Language patterns` 
                 },
               ],
             });
             const extractContent = extractResponse.choices[0]?.message?.content;
             fullContent = typeof extractContent === 'string' ? extractContent : '';
           } else if (item.type === "pdf") {
-            const pdfResponse = await invokeLLM({
+            const pdfResponse = await callLLMWithRetry({
               messages: [
-                { role: "system", content: "You are a comprehensive book analyzer. Read this entire document from start to finish and extract EVERYTHING - every technique, every principle, every example. This is going into a knowledge base that will be used to help with real sales conversations." },
+                { role: "system", content: "You are a book analyzer. Extract key techniques and principles from this document for a sales knowledge base." },
                 { role: "user", content: [
-                  { type: "text", text: `Read this entire PDF from page 1 to the end. Extract EVERYTHING you learn:
+                  { type: "text", text: `Analyze this PDF and extract key learnings:
 Title: ${item.title}
 
-Include:
-- All sales techniques and methodologies
-- Every specific phrase, script, or word choice
-- All objection handling approaches
-- Conversation frameworks and patterns
+Focus on:
+- Sales techniques and methodologies
+- Specific phrases and scripts
+- Objection handling approaches
+- Conversation frameworks
 - Psychology principles
-- Rapport building techniques
-- Trust building strategies
+- Rapport and trust building
 - Closing techniques
-- Any unique insights or strategies
-- Emotional triggers and responses
-- Language patterns
-- Examples and case studies
-
-Be comprehensive - don't skip anything.` },
+- Language patterns` },
                   { type: "file_url", file_url: { url: item.sourceUrl, mime_type: "application/pdf" } }
                 ] },
               ],
@@ -735,15 +742,26 @@ Be comprehensive - don't skip anything.` },
             processingProgress: 50,
           });
 
+          // If no content was extracted, create a basic summary
+          if (!fullContent || fullContent.trim().length === 0) {
+            fullContent = `Content from: ${item.title}. Unable to extract detailed content - the source may require manual review.`;
+          }
+
+          // Truncate content if too long to avoid token limits
+          const maxContentLength = 8000;
+          const truncatedContent = fullContent.length > maxContentLength 
+            ? fullContent.substring(0, maxContentLength) + "... [content truncated]"
+            : fullContent;
+
           // Step 2: Generate structured summary of what was learned
-          const summaryResponse = await invokeLLM({
+          const summaryResponse = await callLLMWithRetry({
             messages: [
-              { role: "system", content: "You are a sales training expert. Organize the extracted content into structured categories." },
-              { role: "user", content: `Based on this extracted content, provide a comprehensive structured summary:
+              { role: "system", content: "You are a sales training expert. Organize the content into structured categories. Always provide helpful content even if the source material is limited." },
+              { role: "user", content: `Based on this content, provide a structured summary:
 
-${fullContent}
+${truncatedContent}
 
-Provide a JSON response with detailed information for each category:` },
+Provide a JSON response with information for each category:` },
             ],
             response_format: {
               type: "json_schema",
@@ -753,15 +771,15 @@ Provide a JSON response with detailed information for each category:` },
                 schema: {
                   type: "object",
                   properties: {
-                    comprehensiveSummary: { type: "string", description: "Overall summary of what was learned (2-3 paragraphs)" },
-                    salesPsychology: { type: "string", description: "Psychology principles and human behavior insights" },
-                    rapportTechniques: { type: "string", description: "Techniques for building rapport and connection" },
+                    comprehensiveSummary: { type: "string", description: "Overall summary of what was learned" },
+                    salesPsychology: { type: "string", description: "Psychology principles and insights" },
+                    rapportTechniques: { type: "string", description: "Techniques for building rapport" },
                     conversationStarters: { type: "string", description: "Opening lines and first message strategies" },
-                    objectionFrameworks: { type: "string", description: "How to handle objections and resistance" },
-                    closingTechniques: { type: "string", description: "Techniques for closing and getting commitment" },
-                    languagePatterns: { type: "string", description: "Specific phrases, words, and language patterns to use" },
-                    emotionalTriggers: { type: "string", description: "Emotional triggers and how to respond to them" },
-                    trustStrategies: { type: "string", description: "Strategies for building trust and credibility" },
+                    objectionFrameworks: { type: "string", description: "How to handle objections" },
+                    closingTechniques: { type: "string", description: "Techniques for closing" },
+                    languagePatterns: { type: "string", description: "Specific phrases and language patterns" },
+                    emotionalTriggers: { type: "string", description: "Emotional triggers and responses" },
+                    trustStrategies: { type: "string", description: "Strategies for building trust" },
                   },
                   required: ["comprehensiveSummary", "salesPsychology", "rapportTechniques", "conversationStarters", "objectionFrameworks", "closingTechniques", "languagePatterns", "emotionalTriggers", "trustStrategies"],
                   additionalProperties: false,
@@ -771,7 +789,23 @@ Provide a JSON response with detailed information for each category:` },
           });
 
           const summaryContent = summaryResponse.choices[0]?.message?.content;
-          const summary = JSON.parse(typeof summaryContent === 'string' ? summaryContent : '{}');
+          let summary;
+          try {
+            summary = JSON.parse(typeof summaryContent === 'string' ? summaryContent : '{}');
+          } catch {
+            // If JSON parsing fails, create a basic summary
+            summary = {
+              comprehensiveSummary: fullContent.substring(0, 500),
+              salesPsychology: "Not extracted",
+              rapportTechniques: "Not extracted",
+              conversationStarters: "Not extracted",
+              objectionFrameworks: "Not extracted",
+              closingTechniques: "Not extracted",
+              languagePatterns: "Not extracted",
+              emotionalTriggers: "Not extracted",
+              trustStrategies: "Not extracted",
+            };
+          }
 
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
             ...summary,
