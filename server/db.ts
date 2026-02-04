@@ -1,4 +1,4 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, 
@@ -7,6 +7,8 @@ import {
   InsertKnowledgeBaseItem,
   conversations,
   InsertConversation,
+  conversationMessages,
+  InsertConversationMessage,
   suggestions,
   InsertSuggestion
 } from "../drizzle/schema";
@@ -146,6 +148,7 @@ export async function updateKnowledgeBaseItem(id: number, userId: number, update
   objectionsHandled?: string | null;
   languageStyles?: string | null;
   brainType?: "friend" | "expert" | "both";
+  platform?: string | null;
   status?: "pending" | "processing" | "ready" | "failed";
 }) {
   const db = await getDb();
@@ -182,7 +185,6 @@ export async function getReadyKnowledgeBaseContent(userId: number, brainType?: "
 
   const results = await baseQuery;
   
-  // Filter by brain type if specified
   if (brainType) {
     return results.filter(item => item.brainType === brainType || item.brainType === "both");
   }
@@ -221,8 +223,10 @@ export async function getConversation(id: number, userId: number) {
 
 export async function updateConversation(id: number, userId: number, updates: {
   title?: string | null;
-  analysisContext?: "objection" | "tone_shift" | "referral" | "first_message" | "follow_up" | "general";
-  detectedTone?: string | null;
+  buyerName?: string | null;
+  replyMode?: "friend" | "expert";
+  outcome?: "pending" | "won" | "lost";
+  outcomeNotes?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -236,12 +240,53 @@ export async function deleteConversation(id: number, userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Delete associated suggestions first
+  // Delete associated messages first
+  await db.delete(conversationMessages)
+    .where(and(eq(conversationMessages.conversationId, id), eq(conversationMessages.userId, userId)));
+  
+  // Delete associated suggestions
   await db.delete(suggestions)
     .where(and(eq(suggestions.conversationId, id), eq(suggestions.userId, userId)));
   
   await db.delete(conversations)
     .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
+}
+
+// ============ CONVERSATION MESSAGE QUERIES ============
+
+export async function createConversationMessage(msg: InsertConversationMessage) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.insert(conversationMessages).values(msg);
+  return result[0].insertId;
+}
+
+export async function getConversationMessages(conversationId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(conversationMessages)
+    .where(and(
+      eq(conversationMessages.conversationId, conversationId),
+      eq(conversationMessages.userId, userId)
+    ))
+    .orderBy(conversationMessages.createdAt);
+}
+
+export async function getConversationThread(conversationId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Get all messages in the conversation to build context
+  const messages = await db.select().from(conversationMessages)
+    .where(and(
+      eq(conversationMessages.conversationId, conversationId),
+      eq(conversationMessages.userId, userId)
+    ))
+    .orderBy(conversationMessages.createdAt);
+
+  return messages.map(m => m.inputText).join("\n\n---\n\n");
 }
 
 // ============ SUGGESTION QUERIES ============
@@ -266,6 +311,18 @@ export async function getSuggestionsForConversation(conversationId: number, user
     .orderBy(suggestions.createdAt);
 }
 
+export async function getSuggestionsForMessage(messageId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(suggestions)
+    .where(and(
+      eq(suggestions.messageId, messageId),
+      eq(suggestions.userId, userId)
+    ))
+    .orderBy(suggestions.createdAt);
+}
+
 export async function updateSuggestionUsage(id: number, userId: number, wasUsed: "yes" | "no" | "modified") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -282,4 +339,46 @@ export async function updateSuggestionFeedback(id: number, userId: number, feedb
   await db.update(suggestions)
     .set({ feedback })
     .where(and(eq(suggestions.id, id), eq(suggestions.userId, userId)));
+}
+
+// ============ ANALYTICS QUERIES ============
+
+export async function getConversationStats(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const allConversations = await db.select().from(conversations)
+    .where(eq(conversations.userId, userId));
+
+  const total = allConversations.length;
+  const won = allConversations.filter(c => c.outcome === "won").length;
+  const lost = allConversations.filter(c => c.outcome === "lost").length;
+  const pending = allConversations.filter(c => c.outcome === "pending").length;
+
+  // Stats by reply mode
+  const friendConvs = allConversations.filter(c => c.replyMode === "friend");
+  const expertConvs = allConversations.filter(c => c.replyMode === "expert");
+
+  const friendWon = friendConvs.filter(c => c.outcome === "won").length;
+  const friendTotal = friendConvs.filter(c => c.outcome !== "pending").length;
+  const expertWon = expertConvs.filter(c => c.outcome === "won").length;
+  const expertTotal = expertConvs.filter(c => c.outcome !== "pending").length;
+
+  return {
+    total,
+    won,
+    lost,
+    pending,
+    conversionRate: total > 0 ? Math.round((won / (won + lost || 1)) * 100) : 0,
+    friendMode: {
+      total: friendConvs.length,
+      won: friendWon,
+      conversionRate: friendTotal > 0 ? Math.round((friendWon / friendTotal) * 100) : 0,
+    },
+    expertMode: {
+      total: expertConvs.length,
+      won: expertWon,
+      conversionRate: expertTotal > 0 ? Math.round((expertWon / expertTotal) * 100) : 0,
+    },
+  };
 }

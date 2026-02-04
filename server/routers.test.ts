@@ -14,7 +14,20 @@ vi.mock("./db", () => ({
   createConversation: vi.fn().mockResolvedValue(1),
   getConversations: vi.fn().mockResolvedValue([]),
   getConversation: vi.fn().mockResolvedValue(null),
+  updateConversation: vi.fn().mockResolvedValue(undefined),
   deleteConversation: vi.fn().mockResolvedValue(undefined),
+  createConversationMessage: vi.fn().mockResolvedValue(1),
+  getConversationMessages: vi.fn().mockResolvedValue([]),
+  getConversationThread: vi.fn().mockResolvedValue(""),
+  getConversationStats: vi.fn().mockResolvedValue({
+    total: 10,
+    won: 5,
+    lost: 3,
+    pending: 2,
+    conversionRate: 62.5,
+    friendMode: { total: 6, won: 3, lost: 2, conversionRate: 60 },
+    expertMode: { total: 4, won: 2, lost: 1, conversionRate: 66.7 },
+  }),
   createSuggestion: vi.fn().mockResolvedValue(1),
   getSuggestionsForConversation: vi.fn().mockResolvedValue([]),
   updateSuggestionUsage: vi.fn().mockResolvedValue(undefined),
@@ -168,33 +181,53 @@ describe("knowledgeBase", () => {
     expect(db.getKnowledgeBaseItems).toHaveBeenCalledWith(1);
   });
 
-  it("adds video URL to knowledge base", async () => {
+  it("adds URL to knowledge base", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const db = await import("./db");
 
-    const result = await caller.knowledgeBase.addVideo({
+    const result = await caller.knowledgeBase.addUrl({
       title: "Sales Training Video",
       url: "https://youtube.com/watch?v=abc123",
     });
 
     expect(result.success).toBe(true);
     expect(result.id).toBe(1);
+    expect(result.platform).toBe("youtube");
     expect(db.createKnowledgeBaseItem).toHaveBeenCalledWith({
       userId: 1,
-      type: "video",
+      type: "url",
       title: "Sales Training Video",
       sourceUrl: "https://youtube.com/watch?v=abc123",
+      platform: "youtube",
       status: "pending",
     });
   });
 
-  it("validates video URL format", async () => {
+  it("detects Instagram platform from URL", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.knowledgeBase.addUrl({
+      title: "Instagram Sales Tips",
+      url: "https://instagram.com/p/abc123",
+    });
+
+    expect(result.platform).toBe("instagram");
+    expect(db.createKnowledgeBaseItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "instagram",
+      })
+    );
+  });
+
+  it("validates URL format", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(
-      caller.knowledgeBase.addVideo({
+      caller.knowledgeBase.addUrl({
         title: "Test",
         url: "not-a-valid-url",
       })
@@ -234,10 +267,12 @@ describe("conversation", () => {
 
     const result = await caller.conversation.analyze({
       inputText: "Hey, I saw your post about the product. How much does it cost?",
+      replyMode: "friend",
     });
 
     expect(result).toBeDefined();
     expect(result.conversationId).toBe(1);
+    expect(result.messageId).toBe(1);
     expect(result.analysis).toBeDefined();
     expect(result.analysis.contextType).toBe("general");
     expect(result.suggestions).toHaveLength(2); // primary + alternative
@@ -251,6 +286,38 @@ describe("conversation", () => {
     await expect(
       caller.conversation.analyze({ inputText: "" })
     ).rejects.toThrow();
+  });
+
+  it("gets conversation stats", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+
+    const result = await caller.conversation.stats();
+
+    expect(result).toBeDefined();
+    expect(result.total).toBe(10);
+    expect(result.won).toBe(5);
+    expect(result.conversionRate).toBe(62.5);
+    expect(result.friendMode.conversionRate).toBe(60);
+    expect(result.expertMode.conversionRate).toBe(66.7);
+  });
+
+  it("updates conversation outcome", async () => {
+    const ctx = createAuthContext();
+    const caller = appRouter.createCaller(ctx);
+    const db = await import("./db");
+
+    const result = await caller.conversation.updateOutcome({
+      id: 1,
+      outcome: "won",
+      outcomeNotes: "Closed the deal!",
+    });
+
+    expect(result.success).toBe(true);
+    expect(db.updateConversation).toHaveBeenCalledWith(1, 1, {
+      outcome: "won",
+      outcomeNotes: "Closed the deal!",
+    });
   });
 
   it("deletes conversation and associated suggestions", async () => {

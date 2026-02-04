@@ -40,3 +40,9 @@
 - [x] Friend/Expert Mode toggle in conversation coach
 - [x] "What I Learned" summary for knowledge base items
 - [x] Conversation buyer/prospect tagging
+
+## New Features (v3)
+
+- [x] Change "Add Video" to "Add URL" (YouTube/Instagram support with video transcription)
+- [x] Conversation threading (follow-up messages within existing conversations)
+- [x] Success tracking (won/lost status and conversion rate analytics)

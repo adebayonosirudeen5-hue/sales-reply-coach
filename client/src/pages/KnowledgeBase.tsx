@@ -11,7 +11,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { toast } from "sonner";
 import {
   Brain,
-  Video,
   FileText,
   Plus,
   Trash2,
@@ -26,14 +25,17 @@ import {
   MessageCircle,
   Sparkles,
   Heart,
-  Briefcase
+  Briefcase,
+  Globe,
+  Youtube,
+  Instagram
 } from "lucide-react";
 
 export default function KnowledgeBase() {
-  const [videoDialogOpen, setVideoDialogOpen] = useState(false);
+  const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
-  const [videoTitle, setVideoTitle] = useState("");
-  const [videoUrl, setVideoUrl] = useState("");
+  const [urlTitle, setUrlTitle] = useState("");
+  const [urlValue, setUrlValue] = useState("");
   const [pdfTitle, setPdfTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
@@ -42,16 +44,16 @@ export default function KnowledgeBase() {
   const utils = trpc.useUtils();
   const { data: items, isLoading } = trpc.knowledgeBase.list.useQuery();
 
-  const addVideo = trpc.knowledgeBase.addVideo.useMutation({
-    onSuccess: () => {
-      toast.success("Video added to knowledge base!");
-      setVideoDialogOpen(false);
-      setVideoTitle("");
-      setVideoUrl("");
+  const addUrl = trpc.knowledgeBase.addUrl.useMutation({
+    onSuccess: (data) => {
+      toast.success(`URL added to knowledge base! (${data.platform})`);
+      setUrlDialogOpen(false);
+      setUrlTitle("");
+      setUrlValue("");
       utils.knowledgeBase.list.invalidate();
     },
     onError: (error) => {
-      toast.error("Failed to add video: " + error.message);
+      toast.error("Failed to add URL: " + error.message);
     },
   });
 
@@ -69,7 +71,7 @@ export default function KnowledgeBase() {
   });
 
   const processItem = trpc.knowledgeBase.processItem.useMutation({
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast.success("Content processed successfully!");
       utils.knowledgeBase.list.invalidate();
     },
@@ -99,12 +101,12 @@ export default function KnowledgeBase() {
     },
   });
 
-  const handleAddVideo = () => {
-    if (!videoTitle.trim() || !videoUrl.trim()) {
+  const handleAddUrl = () => {
+    if (!urlTitle.trim() || !urlValue.trim()) {
       toast.error("Please enter both title and URL");
       return;
     }
-    addVideo.mutate({ title: videoTitle.trim(), url: videoUrl.trim() });
+    addUrl.mutate({ title: urlTitle.trim(), url: urlValue.trim() });
   };
 
   const handleAddPdf = async () => {
@@ -208,6 +210,25 @@ export default function KnowledgeBase() {
     );
   };
 
+  const getPlatformIcon = (platform: string | null, type: string) => {
+    if (type === "pdf") return <FileText className="h-5 w-5 text-red-500" />;
+    
+    switch (platform) {
+      case "youtube":
+        return <Youtube className="h-5 w-5 text-red-500" />;
+      case "instagram":
+        return <Instagram className="h-5 w-5 text-pink-500" />;
+      default:
+        return <Globe className="h-5 w-5 text-primary" />;
+    }
+  };
+
+  const getPlatformLabel = (platform: string | null, type: string) => {
+    if (type === "pdf") return "PDF";
+    if (type === "video") return "VIDEO";
+    return platform?.toUpperCase() || "URL";
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -217,56 +238,60 @@ export default function KnowledgeBase() {
             Knowledge Base
           </h1>
           <p className="text-muted-foreground">
-            Train your AI coach with sales videos and documents
+            Train your AI coach with URLs and documents
           </p>
         </div>
         <div className="flex gap-2">
-          <Dialog open={videoDialogOpen} onOpenChange={setVideoDialogOpen}>
+          <Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2">
-                <Video className="h-4 w-4" />
-                Add Video
+                <LinkIcon className="h-4 w-4" />
+                Add URL
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add Video URL</DialogTitle>
+                <DialogTitle>Add URL</DialogTitle>
                 <DialogDescription>
-                  Add a sales training video URL to your knowledge base
+                  Add a YouTube, Instagram, or any other URL to your knowledge base.
+                  The AI will extract and learn from the content.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
-                  <Label htmlFor="video-title">Title</Label>
+                  <Label htmlFor="url-title">Title</Label>
                   <Input
-                    id="video-title"
+                    id="url-title"
                     placeholder="e.g., Objection Handling Masterclass"
-                    value={videoTitle}
-                    onChange={(e) => setVideoTitle(e.target.value)}
+                    value={urlTitle}
+                    onChange={(e) => setUrlTitle(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="video-url">Video URL</Label>
+                  <Label htmlFor="url-value">URL</Label>
                   <Input
-                    id="video-url"
-                    placeholder="https://youtube.com/watch?v=..."
-                    value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
+                    id="url-value"
+                    placeholder="https://youtube.com/watch?v=... or https://instagram.com/p/..."
+                    value={urlValue}
+                    onChange={(e) => setUrlValue(e.target.value)}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Supports YouTube, Instagram, TikTok, Facebook, Twitter/X, LinkedIn, and more
+                  </p>
                 </div>
               </div>
               <DialogFooter>
                 <Button
-                  onClick={handleAddVideo}
-                  disabled={addVideo.isPending}
+                  onClick={handleAddUrl}
+                  disabled={addUrl.isPending}
                   className="gap-2"
                 >
-                  {addVideo.isPending ? (
+                  {addUrl.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Plus className="h-4 w-4" />
                   )}
-                  Add Video
+                  Add URL
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -356,7 +381,7 @@ export default function KnowledgeBase() {
             <Brain className="h-12 w-12 text-muted-foreground/50 mb-4" />
             <h3 className="font-semibold mb-2">No knowledge base items yet</h3>
             <p className="text-sm text-muted-foreground text-center max-w-md mb-4">
-              Add sales training videos and PDF documents to train your AI coach.
+              Add URLs (YouTube, Instagram, etc.) and PDF documents to train your AI coach.
               The more content you add, the better your suggestions will be.
             </p>
           </CardContent>
@@ -368,13 +393,9 @@ export default function KnowledgeBase() {
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
-                    {item.type === "video" ? (
-                      <Video className="h-5 w-5 text-primary" />
-                    ) : (
-                      <FileText className="h-5 w-5 text-primary" />
-                    )}
+                    {getPlatformIcon(item.platform, item.type)}
                     <Badge variant="secondary" className="text-xs">
-                      {item.type.toUpperCase()}
+                      {getPlatformLabel(item.platform, item.type)}
                     </Badge>
                   </div>
                   <div className="flex gap-1">
@@ -390,7 +411,7 @@ export default function KnowledgeBase() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0 flex-1 flex flex-col">
-                {item.type === "video" && (
+                {(item.type === "url" || item.type === "video") && (
                   <a
                     href={item.sourceUrl}
                     target="_blank"

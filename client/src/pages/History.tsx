@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import {
   History as HistoryIcon,
@@ -21,7 +23,11 @@ import {
   Search,
   Filter,
   Heart,
-  Briefcase
+  Briefcase,
+  Trophy,
+  XCircle,
+  Clock,
+  TrendingUp
 } from "lucide-react";
 
 export default function History() {
@@ -29,6 +35,10 @@ export default function History() {
   const [searchQuery, setSearchQuery] = useState("");
   const [buyerFilter, setBuyerFilter] = useState<string>("all");
   const [modeFilter, setModeFilter] = useState<string>("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
+  const [outcomeDialogOpen, setOutcomeDialogOpen] = useState(false);
+  const [selectedOutcome, setSelectedOutcome] = useState<"pending" | "won" | "lost">("pending");
+  const [outcomeNotes, setOutcomeNotes] = useState("");
 
   const utils = trpc.useUtils();
   const { data: conversations, isLoading } = trpc.conversation.list.useQuery();
@@ -36,15 +46,30 @@ export default function History() {
     { id: selectedConversation! },
     { enabled: !!selectedConversation }
   );
+  const { data: stats } = trpc.conversation.stats.useQuery();
 
   const deleteConversation = trpc.conversation.delete.useMutation({
     onSuccess: () => {
       toast.success("Conversation deleted");
       utils.conversation.list.invalidate();
+      utils.conversation.stats.invalidate();
       setSelectedConversation(null);
     },
     onError: (error) => {
       toast.error("Failed to delete: " + error.message);
+    },
+  });
+
+  const updateOutcome = trpc.conversation.updateOutcome.useMutation({
+    onSuccess: () => {
+      toast.success("Outcome updated!");
+      utils.conversation.list.invalidate();
+      utils.conversation.stats.invalidate();
+      utils.conversation.get.invalidate();
+      setOutcomeDialogOpen(false);
+    },
+    onError: (error) => {
+      toast.error("Failed to update: " + error.message);
     },
   });
 
@@ -65,8 +90,7 @@ export default function History() {
       const searchLower = searchQuery.toLowerCase();
       const matchesSearch = !searchQuery || 
         conv.title?.toLowerCase().includes(searchLower) ||
-        conv.buyerName?.toLowerCase().includes(searchLower) ||
-        conv.inputText.toLowerCase().includes(searchLower);
+        conv.buyerName?.toLowerCase().includes(searchLower);
 
       // Buyer filter
       const matchesBuyer = buyerFilter === "all" || conv.buyerName === buyerFilter;
@@ -74,9 +98,12 @@ export default function History() {
       // Mode filter
       const matchesMode = modeFilter === "all" || conv.replyMode === modeFilter;
 
-      return matchesSearch && matchesBuyer && matchesMode;
+      // Outcome filter
+      const matchesOutcome = outcomeFilter === "all" || conv.outcome === outcomeFilter;
+
+      return matchesSearch && matchesBuyer && matchesMode && matchesOutcome;
     });
-  }, [conversations, searchQuery, buyerFilter, modeFilter]);
+  }, [conversations, searchQuery, buyerFilter, modeFilter, outcomeFilter]);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -124,6 +151,38 @@ export default function History() {
     );
   };
 
+  const getOutcomeBadge = (outcome: string | null) => {
+    if (outcome === "won") {
+      return (
+        <Badge variant="outline" className="gap-1 bg-green-50 text-green-700 border-green-200">
+          <Trophy className="h-3 w-3" />
+          Won
+        </Badge>
+      );
+    }
+    if (outcome === "lost") {
+      return (
+        <Badge variant="outline" className="gap-1 bg-red-50 text-red-700 border-red-200">
+          <XCircle className="h-3 w-3" />
+          Lost
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="outline" className="gap-1 bg-gray-50 text-gray-700 border-gray-200">
+        <Clock className="h-3 w-3" />
+        Pending
+      </Badge>
+    );
+  };
+
+  const openOutcomeDialog = (conv: { id: number; outcome: string | null; outcomeNotes: string | null }) => {
+    setSelectedConversation(conv.id);
+    setSelectedOutcome((conv.outcome as "pending" | "won" | "lost") || "pending");
+    setOutcomeNotes(conv.outcomeNotes || "");
+    setOutcomeDialogOpen(true);
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -132,9 +191,49 @@ export default function History() {
           Conversation History
         </h1>
         <p className="text-muted-foreground">
-          Review past conversations and suggestions
+          Review past conversations, track outcomes, and measure success
         </p>
       </div>
+
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total Conversations</CardDescription>
+              <CardTitle className="text-2xl">{stats.total}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Won</CardDescription>
+              <CardTitle className="text-2xl text-green-600">{stats.won}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Conversion Rate</CardDescription>
+              <CardTitle className="text-2xl flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                {stats.conversionRate}%
+              </CardTitle>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>By Mode</CardDescription>
+              <div className="flex gap-4 mt-1">
+                <div className="text-sm">
+                  <span className="text-pink-600">Friend:</span> {stats.friendMode.conversionRate}%
+                </div>
+                <div className="text-sm">
+                  <span className="text-blue-600">Expert:</span> {stats.expertMode.conversionRate}%
+                </div>
+              </div>
+            </CardHeader>
+          </Card>
+        </div>
+      )}
 
       {/* Filters */}
       {conversations && conversations.length > 0 && (
@@ -148,10 +247,10 @@ export default function History() {
               className="pl-9"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {uniqueBuyers.length > 0 && (
               <Select value={buyerFilter} onValueChange={setBuyerFilter}>
-                <SelectTrigger className="w-[160px]">
+                <SelectTrigger className="w-[140px]">
                   <User className="h-4 w-4 mr-2" />
                   <SelectValue placeholder="All Buyers" />
                 </SelectTrigger>
@@ -164,24 +263,26 @@ export default function History() {
               </Select>
             )}
             <Select value={modeFilter} onValueChange={setModeFilter}>
-              <SelectTrigger className="w-[140px]">
+              <SelectTrigger className="w-[130px]">
                 <Filter className="h-4 w-4 mr-2" />
                 <SelectValue placeholder="All Modes" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Modes</SelectItem>
-                <SelectItem value="friend">
-                  <span className="flex items-center gap-2">
-                    <Heart className="h-3 w-3 text-pink-500" />
-                    Friend
-                  </span>
-                </SelectItem>
-                <SelectItem value="expert">
-                  <span className="flex items-center gap-2">
-                    <Briefcase className="h-3 w-3 text-blue-500" />
-                    Expert
-                  </span>
-                </SelectItem>
+                <SelectItem value="friend">Friend</SelectItem>
+                <SelectItem value="expert">Expert</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
+              <SelectTrigger className="w-[130px]">
+                <Trophy className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="All Outcomes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Outcomes</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="won">Won</SelectItem>
+                <SelectItem value="lost">Lost</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -218,11 +319,13 @@ export default function History() {
             <Card
               key={conv.id}
               className="cursor-pointer hover:border-primary/50 transition-colors"
-              onClick={() => setSelectedConversation(conv.id)}
             >
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
-                  <div className="space-y-1">
+                  <div 
+                    className="space-y-1 flex-1"
+                    onClick={() => setSelectedConversation(conv.id)}
+                  >
                     <CardTitle className="text-base flex items-center gap-2">
                       <MessageSquareText className="h-4 w-4 text-primary" />
                       {conv.title || "Untitled Conversation"}
@@ -242,21 +345,24 @@ export default function History() {
                   </div>
                   <div className="flex items-center gap-2">
                     {getReplyModeBadge(conv.replyMode)}
-                    <Badge
-                      variant="outline"
-                      className={getContextColor(conv.analysisContext)}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="p-0 h-auto"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openOutcomeDialog(conv);
+                      }}
                     >
-                      {getContextLabel(conv.analysisContext)}
-                    </Badge>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      {getOutcomeBadge(conv.outcome)}
+                    </Button>
+                    <ChevronRight 
+                      className="h-4 w-4 text-muted-foreground cursor-pointer"
+                      onClick={() => setSelectedConversation(conv.id)}
+                    />
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="pt-0">
-                <p className="text-sm text-muted-foreground line-clamp-2">
-                  {conv.inputText}
-                </p>
-              </CardContent>
             </Card>
           ))}
         </div>
@@ -264,7 +370,7 @@ export default function History() {
 
       {/* Conversation Detail Dialog */}
       <Dialog
-        open={!!selectedConversation}
+        open={!!selectedConversation && !outcomeDialogOpen}
         onOpenChange={(open) => !open && setSelectedConversation(null)}
       >
         <DialogContent className="max-w-2xl max-h-[80vh]">
@@ -288,34 +394,50 @@ export default function History() {
           {conversationDetail && (
             <ScrollArea className="max-h-[60vh] pr-4">
               <div className="space-y-6">
-                {/* Original Input */}
+                {/* Mode and Outcome */}
                 <div className="space-y-2">
-                  <h4 className="text-sm font-semibold">Original Conversation</h4>
-                  <div className="bg-muted/50 rounded-lg p-4">
-                    <p className="text-sm whitespace-pre-wrap">
-                      {conversationDetail.conversation.inputText}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Analysis */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold">Analysis</h4>
+                  <h4 className="text-sm font-semibold">Status</h4>
                   <div className="flex flex-wrap gap-2">
                     {getReplyModeBadge(conversationDetail.conversation.replyMode)}
-                    <Badge
-                      variant="outline"
-                      className={getContextColor(conversationDetail.conversation.analysisContext)}
-                    >
-                      {getContextLabel(conversationDetail.conversation.analysisContext)}
-                    </Badge>
-                    {conversationDetail.conversation.detectedTone && (
-                      <Badge variant="outline">
-                        Tone: {conversationDetail.conversation.detectedTone}
-                      </Badge>
-                    )}
+                    {getOutcomeBadge(conversationDetail.conversation.outcome)}
                   </div>
+                  {conversationDetail.conversation.outcomeNotes && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Notes: {conversationDetail.conversation.outcomeNotes}
+                    </p>
+                  )}
                 </div>
+
+                {/* Messages in Thread */}
+                {conversationDetail.messages && conversationDetail.messages.length > 0 && (
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold">Conversation Thread ({conversationDetail.messages.length} messages)</h4>
+                    <div className="space-y-3">
+                      {conversationDetail.messages.map((msg, idx) => (
+                        <div key={msg.id} className="bg-muted/50 rounded-lg p-4 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-muted-foreground">
+                              Message {idx + 1} • {new Date(msg.createdAt).toLocaleString()}
+                            </span>
+                            <div className="flex gap-1">
+                              {msg.analysisContext && (
+                                <Badge variant="outline" className={getContextColor(msg.analysisContext)}>
+                                  {getContextLabel(msg.analysisContext)}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-sm whitespace-pre-wrap">{msg.inputText}</p>
+                          {msg.detectedTone && (
+                            <p className="text-xs text-muted-foreground">
+                              Detected tone: {msg.detectedTone}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Suggestions */}
                 <div className="space-y-2">
@@ -363,7 +485,24 @@ export default function History() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex justify-end pt-4 border-t">
+                <div className="flex justify-between pt-4 border-t">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => {
+                      if (conversationDetail) {
+                        openOutcomeDialog({
+                          id: conversationDetail.conversation.id,
+                          outcome: conversationDetail.conversation.outcome,
+                          outcomeNotes: conversationDetail.conversation.outcomeNotes,
+                        });
+                      }
+                    }}
+                  >
+                    <Trophy className="h-4 w-4" />
+                    Update Outcome
+                  </Button>
                   <Button
                     variant="destructive"
                     size="sm"
@@ -380,12 +519,84 @@ export default function History() {
                     ) : (
                       <Trash2 className="h-4 w-4" />
                     )}
-                    Delete Conversation
+                    Delete
                   </Button>
                 </div>
               </div>
             </ScrollArea>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Outcome Update Dialog */}
+      <Dialog open={outcomeDialogOpen} onOpenChange={setOutcomeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update Conversation Outcome</DialogTitle>
+            <DialogDescription>
+              Track whether this conversation led to a successful sale
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Outcome</Label>
+              <Select value={selectedOutcome} onValueChange={(v) => setSelectedOutcome(v as "pending" | "won" | "lost")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">
+                    <span className="flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-gray-500" />
+                      Pending
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="won">
+                    <span className="flex items-center gap-2">
+                      <Trophy className="h-4 w-4 text-green-500" />
+                      Won
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="lost">
+                    <span className="flex items-center gap-2">
+                      <XCircle className="h-4 w-4 text-red-500" />
+                      Lost
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes (optional)</Label>
+              <Textarea
+                placeholder="Add any notes about the outcome..."
+                value={outcomeNotes}
+                onChange={(e) => setOutcomeNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setOutcomeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (selectedConversation) {
+                  updateOutcome.mutate({
+                    id: selectedConversation,
+                    outcome: selectedOutcome,
+                    outcomeNotes: outcomeNotes || undefined,
+                  });
+                }
+              }}
+              disabled={updateOutcome.isPending}
+            >
+              {updateOutcome.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : null}
+              Save
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
