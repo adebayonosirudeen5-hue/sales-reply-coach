@@ -666,17 +666,33 @@ Provide a JSON response with:
           let lastError: Error | null = null;
           for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-              return await invokeLLM(params);
+              const result = await invokeLLM(params);
+              // Validate response structure
+              if (!result || !result.choices || !Array.isArray(result.choices)) {
+                throw new Error("Invalid response structure from AI service");
+              }
+              return result;
             } catch (error) {
               lastError = error instanceof Error ? error : new Error(String(error));
-              console.error(`LLM call attempt ${attempt + 1} failed:`, lastError.message);
+              const errorMsg = lastError.message;
+              
+              // Check for HTML error response (service unavailable)
+              if (errorMsg.includes("<html") || errorMsg.includes("<!DOCTYPE") || errorMsg.includes("not valid JSON")) {
+                console.error(`LLM service unavailable (attempt ${attempt + 1}):`, "Service returned HTML error page");
+                lastError = new Error("AI service is temporarily unavailable. Please try again in a few minutes.");
+              } else {
+                console.error(`LLM call attempt ${attempt + 1} failed:`, errorMsg);
+              }
+              
               if (attempt < maxRetries) {
-                // Wait before retry (exponential backoff)
-                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+                // Wait before retry (exponential backoff: 2s, 4s, 8s)
+                const waitTime = 2000 * Math.pow(2, attempt);
+                console.log(`Retrying in ${waitTime/1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
               }
             }
           }
-          throw lastError || new Error("LLM call failed after retries");
+          throw lastError || new Error("AI service failed after multiple retries. Please try again later.");
         }
 
         try {

@@ -94,3 +94,4 @@
 - [x] Fix /dashboard route returning 404 error
 - [x] Fix workspace.getActive returning undefined instead of null
 - [x] Fix LLM invoke 500 error when processing knowledge base content
+- [x] Fix HTML error response handling when LLM API returns error page
