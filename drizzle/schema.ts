@@ -1,17 +1,11 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
+ * Extended with profile fields for sales personalization.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -20,9 +14,80 @@ export const users = mysqlTable("users", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+  // Profile fields for personalization
+  salesStyle: varchar("salesStyle", { length: 64 }), // e.g., "consultative", "direct", "friendly"
+  industry: varchar("industry", { length: 128 }),
+  productDescription: text("productDescription"),
+  tonePreference: varchar("tonePreference", { length: 64 }), // e.g., "professional", "casual", "warm"
+  companyName: varchar("companyName", { length: 256 }),
 });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-// TODO: Add your tables here
+/**
+ * Knowledge base items - stores references to uploaded videos and PDFs
+ * that form the user's personalized "brain" for generating suggestions.
+ */
+export const knowledgeBaseItems = mysqlTable("knowledge_base_items", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  type: mysqlEnum("type", ["video", "pdf"]).notNull(),
+  title: varchar("title", { length: 512 }).notNull(),
+  // For videos: the original URL; for PDFs: S3 URL
+  sourceUrl: text("sourceUrl").notNull(),
+  // Extracted/transcribed content for AI context
+  extractedContent: text("extractedContent"),
+  // Processing status
+  status: mysqlEnum("status", ["pending", "processing", "ready", "failed"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type KnowledgeBaseItem = typeof knowledgeBaseItems.$inferSelect;
+export type InsertKnowledgeBaseItem = typeof knowledgeBaseItems.$inferInsert;
+
+/**
+ * Conversations - stores conversation analysis sessions
+ */
+export const conversations = mysqlTable("conversations", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  title: varchar("title", { length: 256 }),
+  // Original input: either extracted text from screenshot or pasted text
+  inputText: text("inputText").notNull(),
+  // If screenshot was uploaded, store the S3 URL
+  screenshotUrl: text("screenshotUrl"),
+  // AI analysis of the conversation context
+  analysisContext: mysqlEnum("analysisContext", ["objection", "tone_shift", "referral", "first_message", "follow_up", "general"]).default("general"),
+  // Detected tone of the prospect
+  detectedTone: varchar("detectedTone", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Conversation = typeof conversations.$inferSelect;
+export type InsertConversation = typeof conversations.$inferInsert;
+
+/**
+ * Suggestions - stores AI-generated reply suggestions for each conversation
+ */
+export const suggestions = mysqlTable("suggestions", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").notNull(),
+  userId: int("userId").notNull(),
+  // The suggested reply text
+  suggestionText: text("suggestionText").notNull(),
+  // Type of suggestion
+  suggestionType: mysqlEnum("suggestionType", ["primary", "alternative", "expert_referral"]).default("primary").notNull(),
+  // Tone of the suggestion
+  tone: varchar("tone", { length: 64 }),
+  // Whether the user used this suggestion
+  wasUsed: mysqlEnum("wasUsed", ["yes", "no", "modified"]).default("no"),
+  // User feedback on the suggestion
+  feedback: mysqlEnum("feedback", ["helpful", "not_helpful", "neutral"]),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Suggestion = typeof suggestions.$inferSelect;
+export type InsertSuggestion = typeof suggestions.$inferInsert;
