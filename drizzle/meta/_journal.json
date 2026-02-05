@@ -8,6 +8,13 @@
       "when": 1770221234874,
       "tag": "0000_brief_dazzler",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1770257420255,
+      "tag": "0001_acoustic_diamondback",
+      "breakpoints": true
     }
   ]
 }

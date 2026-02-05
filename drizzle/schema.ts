@@ -259,3 +259,63 @@ export const suggestions = mysqlTable("suggestions", {
 
 export type Suggestion = typeof suggestions.$inferSelect;
 export type InsertSuggestion = typeof suggestions.$inferInsert;
+
+/**
+ * Knowledge chunks - individual pieces of knowledge extracted from sources
+ * Used for RAG retrieval when generating AI responses
+ */
+export const knowledgeChunks = mysqlTable("knowledge_chunks", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  sourceId: int("sourceId").notNull(), // Links to knowledgeBaseItems
+  // Category of this knowledge chunk
+  category: mysqlEnum("category", [
+    "opening_lines",
+    "rapport_building",
+    "pain_discovery",
+    "objection_handling",
+    "trust_building",
+    "closing_techniques",
+    "psychology_insight",
+    "language_pattern",
+    "emotional_trigger",
+    "general_wisdom"
+  ]).notNull(),
+  // The actual knowledge content
+  content: text("content").notNull(),
+  // Key phrases or triggers that should activate this knowledge
+  triggerPhrases: text("triggerPhrases"),
+  // Example usage scenario
+  usageExample: text("usageExample"),
+  // Relevance score (higher = more important)
+  relevanceScore: int("relevanceScore").default(50),
+  // Brain type: friend mode, expert mode, or both
+  brainType: mysqlEnum("brainType", ["friend", "expert", "both"]).default("both"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
+export type InsertKnowledgeChunk = typeof knowledgeChunks.$inferInsert;
+
+/**
+ * AI Brain Stats - tracks the AI's learning progress
+ */
+export const aiBrainStats = mysqlTable("ai_brain_stats", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().unique(),
+  // Total sources processed
+  totalSources: int("totalSources").default(0),
+  // Total knowledge chunks extracted
+  totalChunks: int("totalChunks").default(0),
+  // Breakdown by category (JSON)
+  categoryBreakdown: json("categoryBreakdown"),
+  // Intelligence level (calculated based on knowledge)
+  intelligenceLevel: int("intelligenceLevel").default(1),
+  // Intelligence title
+  intelligenceTitle: varchar("intelligenceTitle", { length: 64 }).default("Beginner"),
+  // Last updated
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AIBrainStats = typeof aiBrainStats.$inferSelect;
+export type InsertAIBrainStats = typeof aiBrainStats.$inferInsert;

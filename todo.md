@@ -106,3 +106,19 @@
 ## Bug Fixes (v5)
 
 - [x] Fix stuck "processing" status for knowledge base uploads
+
+## Major Enhancement (v6) - Smart Knowledge Base
+
+### Knowledge Base Intelligence
+- [x] Research RAG (Retrieval Augmented Generation) best practices
+- [x] Implement proper content extraction and chunking from PDFs/videos
+- [x] Store extracted knowledge in searchable format
+- [x] Ensure AI actually retrieves and uses knowledge in responses
+- [x] Add AI intelligence level indicator (show learning progress)
+- [x] Display what the AI has learned from each source
+
+### Conversation Import Feature
+- [x] Add "Import Conversation" option for prospects who seen but not replied
+- [x] Upload full conversation history for context
+- [x] AI analyzes conversation to understand where to re-engage
+- [x] Suggest re-engagement messages based on conversation history

@@ -501,3 +501,240 @@ export async function getConversation(id: number, userId: number) {
     .limit(1);
   return result[0];
 }
+
+
+// ============ KNOWLEDGE CHUNKS (RAG) QUERIES ============
+
+import { knowledgeChunks, InsertKnowledgeChunk, aiBrainStats, InsertAIBrainStats } from "../drizzle/schema";
+
+export async function createKnowledgeChunk(chunk: InsertKnowledgeChunk) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const result = await db.insert(knowledgeChunks).values(chunk);
+  return result[0].insertId;
+}
+
+export async function createKnowledgeChunks(chunks: InsertKnowledgeChunk[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (chunks.length === 0) return;
+  await db.insert(knowledgeChunks).values(chunks);
+}
+
+export async function getKnowledgeChunks(userId: number, category?: string, brainType?: "friend" | "expert") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  let results = await db.select().from(knowledgeChunks)
+    .where(eq(knowledgeChunks.userId, userId))
+    .orderBy(desc(knowledgeChunks.relevanceScore));
+
+  if (category) {
+    results = results.filter(c => c.category === category);
+  }
+
+  if (brainType) {
+    results = results.filter(c => c.brainType === brainType || c.brainType === "both");
+  }
+
+  return results;
+}
+
+export async function getKnowledgeChunksBySource(sourceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.select().from(knowledgeChunks)
+    .where(and(eq(knowledgeChunks.sourceId, sourceId), eq(knowledgeChunks.userId, userId)));
+}
+
+export async function deleteKnowledgeChunksBySource(sourceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db.delete(knowledgeChunks)
+    .where(and(eq(knowledgeChunks.sourceId, sourceId), eq(knowledgeChunks.userId, userId)));
+}
+
+export async function searchKnowledgeChunks(
+  userId: number, 
+  categories: string[], 
+  brainType: "friend" | "expert",
+  limit = 10
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Get all chunks for user
+  let results = await db.select().from(knowledgeChunks)
+    .where(eq(knowledgeChunks.userId, userId))
+    .orderBy(desc(knowledgeChunks.relevanceScore));
+
+  // Filter by categories
+  if (categories.length > 0) {
+    results = results.filter(c => categories.includes(c.category));
+  }
+
+  // Filter by brain type
+  results = results.filter(c => c.brainType === brainType || c.brainType === "both");
+
+  return results.slice(0, limit);
+}
+
+// ============ AI BRAIN STATS QUERIES ============
+
+export async function getOrCreateBrainStats(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const existing = await db.select().from(aiBrainStats)
+    .where(eq(aiBrainStats.userId, userId))
+    .limit(1);
+
+  if (existing[0]) return existing[0];
+
+  // Create new stats
+  await db.insert(aiBrainStats).values({
+    userId,
+    totalSources: 0,
+    totalChunks: 0,
+    categoryBreakdown: {},
+    intelligenceLevel: 1,
+    intelligenceTitle: "Beginner"
+  });
+
+  const newStats = await db.select().from(aiBrainStats)
+    .where(eq(aiBrainStats.userId, userId))
+    .limit(1);
+
+  return newStats[0];
+}
+
+export async function updateBrainStats(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Count sources
+  const sources = await db.select().from(knowledgeBaseItems)
+    .where(and(eq(knowledgeBaseItems.userId, userId), eq(knowledgeBaseItems.status, "ready")));
+  const totalSources = sources.length;
+
+  // Count and categorize chunks
+  const chunks = await db.select().from(knowledgeChunks)
+    .where(eq(knowledgeChunks.userId, userId));
+  const totalChunks = chunks.length;
+
+  // Build category breakdown
+  const categoryBreakdown: Record<string, number> = {};
+  for (const chunk of chunks) {
+    categoryBreakdown[chunk.category] = (categoryBreakdown[chunk.category] || 0) + 1;
+  }
+
+  // Calculate intelligence level and title
+  let intelligenceLevel = 1;
+  let intelligenceTitle = "Beginner";
+
+  if (totalChunks >= 200) {
+    intelligenceLevel = 10;
+    intelligenceTitle = "Sales Guru";
+  } else if (totalChunks >= 150) {
+    intelligenceLevel = 9;
+    intelligenceTitle = "Master Closer";
+  } else if (totalChunks >= 100) {
+    intelligenceLevel = 8;
+    intelligenceTitle = "Expert";
+  } else if (totalChunks >= 75) {
+    intelligenceLevel = 7;
+    intelligenceTitle = "Advanced";
+  } else if (totalChunks >= 50) {
+    intelligenceLevel = 6;
+    intelligenceTitle = "Proficient";
+  } else if (totalChunks >= 35) {
+    intelligenceLevel = 5;
+    intelligenceTitle = "Skilled";
+  } else if (totalChunks >= 25) {
+    intelligenceLevel = 4;
+    intelligenceTitle = "Competent";
+  } else if (totalChunks >= 15) {
+    intelligenceLevel = 3;
+    intelligenceTitle = "Developing";
+  } else if (totalChunks >= 5) {
+    intelligenceLevel = 2;
+    intelligenceTitle = "Learning";
+  }
+
+  // Update or insert stats
+  const existing = await db.select().from(aiBrainStats)
+    .where(eq(aiBrainStats.userId, userId))
+    .limit(1);
+
+  if (existing[0]) {
+    await db.update(aiBrainStats)
+      .set({
+        totalSources,
+        totalChunks,
+        categoryBreakdown,
+        intelligenceLevel,
+        intelligenceTitle
+      })
+      .where(eq(aiBrainStats.userId, userId));
+  } else {
+    await db.insert(aiBrainStats).values({
+      userId,
+      totalSources,
+      totalChunks,
+      categoryBreakdown,
+      intelligenceLevel,
+      intelligenceTitle
+    });
+  }
+
+  return {
+    totalSources,
+    totalChunks,
+    categoryBreakdown,
+    intelligenceLevel,
+    intelligenceTitle
+  };
+}
+
+export async function getBrainStats(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Get or create brain stats
+  const stats = await getOrCreateBrainStats(userId);
+  
+  // Get chunks for detailed breakdown
+  const chunks = await db.select().from(knowledgeChunks)
+    .where(eq(knowledgeChunks.userId, userId));
+  
+  // Build category breakdown
+  const byCategory: Record<string, number> = {};
+  const byBrain: Record<string, number> = { friend: 0, expert: 0, both: 0 };
+  
+  for (const chunk of chunks) {
+    byCategory[chunk.category] = (byCategory[chunk.category] || 0) + 1;
+    const brainType = chunk.brainType || 'both';
+    byBrain[brainType] = (byBrain[brainType] || 0) + 1;
+  }
+
+  // Get total items
+  const items = await db.select().from(knowledgeBaseItems)
+    .where(and(eq(knowledgeBaseItems.userId, userId), eq(knowledgeBaseItems.status, "ready")));
+
+  // Calculate intelligence percentage (0-100)
+  const intelligenceLevel = Math.min(100, Math.round((chunks.length / 200) * 100));
+
+  return {
+    totalItems: items.length,
+    totalChunks: chunks.length,
+    byCategory,
+    byBrain,
+    intelligenceLevel,
+    intelligenceTitle: stats.intelligenceTitle,
+    level: stats.intelligenceLevel,
+  };
+}

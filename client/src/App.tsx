@@ -10,6 +10,7 @@ import Chats from "./pages/Chats";
 import KnowledgeBase from "./pages/KnowledgeBase";
 import Workspaces from "./pages/Workspaces";
 import Analytics from "./pages/Analytics";
+import BrainStats from "./pages/BrainStats";
 import DashboardLayout from "./components/DashboardLayout";
 
 function AuthenticatedRoutes() {
@@ -22,6 +23,7 @@ function AuthenticatedRoutes() {
         <Route path="/knowledge-base" component={KnowledgeBase} />
         <Route path="/workspaces" component={Workspaces} />
         <Route path="/analytics" component={Analytics} />
+        <Route path="/brain" component={BrainStats} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
@@ -38,6 +40,7 @@ function Router() {
       <Route path="/knowledge-base" component={AuthenticatedRoutes} />
       <Route path="/workspaces" component={AuthenticatedRoutes} />
       <Route path="/analytics" component={AuthenticatedRoutes} />
+      <Route path="/brain" component={AuthenticatedRoutes} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

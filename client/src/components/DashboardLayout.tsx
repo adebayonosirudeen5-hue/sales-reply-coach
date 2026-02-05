@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft } from "lucide-react";
+import { MessageSquare, Brain, Briefcase, BarChart3, LogOut, PanelLeft, Sparkles } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -30,6 +30,7 @@ import { Button } from "./ui/button";
 const menuItems = [
   { icon: MessageSquare, label: "Chats", path: "/chats" },
   { icon: Brain, label: "Knowledge Base", path: "/knowledge-base" },
+  { icon: Sparkles, label: "AI Brain", path: "/brain" },
   { icon: Briefcase, label: "Workspaces", path: "/workspaces" },
   { icon: BarChart3, label: "Analytics", path: "/analytics" },
 ];

@@ -49,6 +49,20 @@ vi.mock("./db", () => ({
   getReadyKnowledgeBaseContent: vi.fn().mockResolvedValue([]),
   getConversationContext: vi.fn().mockResolvedValue(""),
   updateAiSuggestionUsage: vi.fn().mockResolvedValue(undefined),
+  
+  // Knowledge chunk functions
+  createKnowledgeChunk: vi.fn().mockResolvedValue(1),
+  getKnowledgeChunks: vi.fn().mockResolvedValue([]),
+  searchKnowledgeChunks: vi.fn().mockResolvedValue([]),
+  deleteKnowledgeChunksBySource: vi.fn().mockResolvedValue(undefined),
+  getBrainStats: vi.fn().mockResolvedValue({
+    totalItems: 5,
+    totalChunks: 50,
+    byCategory: { opening_lines: 10, rapport_building: 15, objection_handling: 10, closing_techniques: 8, general: 7 },
+    byBrain: { friend: 25, expert: 20, both: 5 },
+    intelligenceLevel: 75,
+  }),
+  updateBrainStats: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock storage
@@ -246,7 +260,7 @@ describe("prospect", () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
-    const result = await caller.prospect.stats({ workspaceId: 1 });
+    const result = await caller.analytics.getStats({ workspaceId: 1 });
 
     expect(result).toBeDefined();
     expect(result.total).toBe(10);
@@ -254,20 +268,18 @@ describe("prospect", () => {
     expect(result.conversionRate).toBe(62.5);
   });
 
-  it("updates prospect", async () => {
+  it("updates prospect outcome", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const db = await import("./db");
 
-    const result = await caller.prospect.update({
+    const result = await caller.prospect.updateOutcome({
       id: 1,
-      name: "Jane Doe",
       outcome: "won",
     });
 
     expect(result.success).toBe(true);
     expect(db.updateProspect).toHaveBeenCalledWith(1, 1, expect.objectContaining({
-      name: "Jane Doe",
       outcome: "won",
     }));
   });

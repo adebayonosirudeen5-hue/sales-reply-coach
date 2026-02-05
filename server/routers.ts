@@ -67,6 +67,52 @@ COMMUNICATION RULES:
 - Be direct but not pushy
 - Focus on value and outcomes`;
 
+// Helper function to call LLM with retry logic
+async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetries = 2): Promise<ReturnType<typeof invokeLLM>> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await invokeLLM(params);
+      if (!result || !result.choices || !Array.isArray(result.choices)) {
+        throw new Error("Invalid response structure from AI service");
+      }
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const errorMsg = lastError.message;
+      
+      if (errorMsg.includes("<html") || errorMsg.includes("<!DOCTYPE") || errorMsg.includes("not valid JSON")) {
+        console.error(`LLM service unavailable (attempt ${attempt + 1}):`, "Service returned HTML error page");
+        lastError = new Error("AI service is temporarily unavailable. Please try again in a few minutes.");
+      } else {
+        console.error(`LLM call attempt ${attempt + 1} failed:`, errorMsg);
+      }
+      
+      if (attempt < maxRetries) {
+        const waitTime = 2000 * Math.pow(2, attempt);
+        console.log(`Retrying in ${waitTime/1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+  }
+  throw lastError || new Error("AI service failed after multiple retries. Please try again later.");
+}
+
+// Map conversation context to knowledge categories
+function getRelevantCategories(contextType: string): string[] {
+  const categoryMap: Record<string, string[]> = {
+    "first_contact": ["opening_lines", "rapport_building", "psychology_insight"],
+    "warm_rapport": ["rapport_building", "pain_discovery", "language_pattern"],
+    "pain_discovery": ["pain_discovery", "emotional_trigger", "psychology_insight"],
+    "objection_resistance": ["objection_handling", "trust_building", "psychology_insight"],
+    "trust_reinforcement": ["trust_building", "language_pattern", "psychology_insight"],
+    "referral_to_expert": ["closing_techniques", "trust_building"],
+    "expert_close": ["closing_techniques", "objection_handling", "psychology_insight"],
+    "general": ["general_wisdom", "language_pattern", "psychology_insight"],
+  };
+  return categoryMap[contextType] || categoryMap["general"];
+}
+
 export const appRouter = router({
   system: systemRouter,
   
@@ -77,6 +123,28 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+  }),
+
+  // ============ AI BRAIN STATS ============
+  brain: router({
+    getStats: protectedProcedure.query(async ({ ctx }) => {
+      return db.getOrCreateBrainStats(ctx.user.id);
+    }),
+
+    getChunks: protectedProcedure
+      .input(z.object({ 
+        category: z.string().optional(),
+        brainType: z.enum(["friend", "expert"]).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        return db.getKnowledgeChunks(ctx.user.id, input.category, input.brainType);
+      }),
+
+    getChunksBySource: protectedProcedure
+      .input(z.object({ sourceId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        return db.getKnowledgeChunksBySource(input.sourceId, ctx.user.id);
+      }),
   }),
 
   // ============ WORKSPACE MANAGEMENT ============
@@ -109,12 +177,9 @@ export const appRouter = router({
         const id = await db.createWorkspace({
           userId: ctx.user.id,
           ...input,
-          isActive: true, // New workspace becomes active
+          isActive: true,
         });
-        
-        // Deactivate other workspaces
         await db.setActiveWorkspace(id, ctx.user.id);
-        
         return { id, success: true };
       }),
 
@@ -142,25 +207,19 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    // Analyze user's own profile from social URLs
     analyzeProfile: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         const workspace = await db.getWorkspace(input.id, ctx.user.id);
         if (!workspace) throw new Error("Workspace not found");
 
-        const urls = [
-          workspace.instagramUrl,
-          workspace.tiktokUrl,
-          workspace.storeUrl,
-          workspace.otherUrl,
-        ].filter(Boolean);
+        const urls = [workspace.instagramUrl, workspace.tiktokUrl, workspace.storeUrl, workspace.otherUrl].filter(Boolean);
 
         if (urls.length === 0 && !workspace.nicheDescription) {
           throw new Error("Please add at least one social URL or niche description");
         }
 
-        const response = await invokeLLM({
+        const response = await callLLMWithRetry({
           messages: [
             { role: "system", content: "You are a business profile analyzer. Analyze the provided information to understand what products/services this person offers and their target audience." },
             { role: "user", content: `Analyze this business profile:
@@ -211,7 +270,7 @@ Provide a JSON response with:
       }),
   }),
 
-  // ============ PROSPECT MANAGEMENT (WhatsApp-style contacts) ============
+  // ============ PROSPECT MANAGEMENT ============
   prospect: router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
@@ -236,56 +295,134 @@ Provide a JSON response with:
         tiktokUrl: z.string().optional(),
         storeUrl: z.string().optional(),
         otherUrl: z.string().optional(),
+        importedConversation: z.string().optional(),
+        isReEngagement: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const id = await db.createProspect({
-          ...input,
+          workspaceId: input.workspaceId,
+          name: input.name,
+          instagramUrl: input.instagramUrl,
+          tiktokUrl: input.tiktokUrl,
+          storeUrl: input.storeUrl,
+          otherUrl: input.otherUrl,
           userId: ctx.user.id,
+          conversationStage: input.isReEngagement ? "warm_rapport" : "first_contact",
         });
+
+        // If conversation was imported, analyze it and create initial message
+        if (input.importedConversation) {
+          // Store the imported conversation as the first message
+          await db.createChatMessage({
+            prospectId: id,
+            userId: ctx.user.id,
+            direction: "inbound",
+            content: `[IMPORTED CONVERSATION]\n${input.importedConversation}`,
+          });
+
+          // Get workspace context
+          const workspace = await db.getWorkspace(input.workspaceId, ctx.user.id);
+          
+          // Get relevant knowledge for re-engagement
+          const knowledgeChunks = await db.searchKnowledgeChunks(
+            ctx.user.id,
+            ["re_engagement", "rapport_building", "trust_building"],
+            "friend",
+            5
+          );
+
+          // Analyze the conversation and generate re-engagement suggestion
+          try {
+            const response = await callLLMWithRetry({
+              messages: [
+                { role: "system", content: `You are a sales re-engagement expert. Analyze the imported conversation and suggest a re-engagement message.
+
+IMPORTANT RULES:
+- The prospect has seen previous messages but not replied
+- Be warm, casual, and non-pushy
+- Reference something from the conversation naturally
+- Don't be desperate or needy
+- Suggest 2-3 different approaches` },
+                { role: "user", content: `Analyze this conversation and suggest re-engagement messages:
+
+BUSINESS CONTEXT:
+${workspace?.profileAnalysis || workspace?.nicheDescription || "Not specified"}
+
+LEARNED KNOWLEDGE:
+${knowledgeChunks.map(c => c.content).join("\n")}
+
+IMPORTED CONVERSATION:
+${input.importedConversation}
+
+Provide 2-3 re-engagement message suggestions in JSON format:
+{"suggestions": [{"type": "casual", "text": "...", "why": "..."}, ...], "analysis": {"lastTopic": "...", "prospectInterest": "...", "bestApproach": "..."}}` }
+              ],
+              response_format: { type: "json_object" }
+            });
+
+            const rawContent = response.choices[0]?.message?.content;
+            const content = typeof rawContent === 'string' ? rawContent : '';
+            if (content) {
+              const analysis = JSON.parse(content);
+              // Store the analysis as an outbound suggestion
+              await db.createChatMessage({
+                prospectId: id,
+                userId: ctx.user.id,
+                direction: "outbound",
+                content: `[RE-ENGAGEMENT ANALYSIS]\n${JSON.stringify(analysis, null, 2)}`,
+                isAiSuggestion: true,
+              });
+            }
+          } catch (error) {
+            console.error("Failed to analyze imported conversation:", error);
+          }
+        }
+
         return { id, success: true };
       }),
 
-    // Analyze prospect's profile to suggest first message
     analyzeProfile: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         const prospect = await db.getProspect(input.id, ctx.user.id);
         if (!prospect) throw new Error("Prospect not found");
 
-        const urls = [
-          prospect.instagramUrl,
-          prospect.tiktokUrl,
-          prospect.storeUrl,
-          prospect.otherUrl,
-        ].filter(Boolean);
+        const urls = [prospect.instagramUrl, prospect.tiktokUrl, prospect.storeUrl, prospect.otherUrl].filter(Boolean);
 
         if (urls.length === 0) {
           throw new Error("Please add at least one social URL for this prospect");
         }
 
-        // Get workspace context
         const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
         const workspaceContext = workspace ? `
 Your Business: ${workspace.profileAnalysis || workspace.nicheDescription || "Not specified"}
 Your Products: ${workspace.productsDetected || "Not specified"}` : "";
 
-        const response = await invokeLLM({
+        // Get relevant knowledge for first contact
+        const knowledgeChunks = await db.searchKnowledgeChunks(
+          ctx.user.id,
+          ["opening_lines", "rapport_building", "psychology_insight"],
+          prospect.replyMode || "friend",
+          5
+        );
+        const knowledgeContext = knowledgeChunks.length > 0
+          ? `\n\nYOUR LEARNED KNOWLEDGE:\n${knowledgeChunks.map(c => `[${c.category}]: ${c.content}`).join("\n")}`
+          : "";
+
+        const response = await callLLMWithRetry({
           messages: [
-            { role: "system", content: `You are a sales conversation strategist. Analyze the prospect's profile and suggest a personalized first message that will get them to reply.
-${FRIEND_MODE_INSTRUCTIONS}` },
-            { role: "user", content: `Analyze this prospect's profile and suggest a first message:
+            { role: "system", content: "You are a prospect analyzer. Analyze the prospect's profile and suggest a personalized first message." },
+            { role: "user", content: `Analyze this prospect and suggest a first message:
 ${workspaceContext}
 
-Prospect's Profile:
-Instagram: ${prospect.instagramUrl || "Not provided"}
-TikTok: ${prospect.tiktokUrl || "Not provided"}
-Store: ${prospect.storeUrl || "Not provided"}
-Other: ${prospect.otherUrl || "Not provided"}
+Prospect URLs:
+${urls.join("\n")}
+${knowledgeContext}
 
 Provide a JSON response with:
 1. profileAnalysis: What you learned about this prospect
 2. detectedInterests: Their interests/niche
-3. suggestedFirstMessage: A natural, friendly first message that references something specific about them` },
+3. suggestedFirstMessage: A personalized first message that would get them to reply` },
           ],
           response_format: {
             type: "json_schema",
@@ -318,22 +455,19 @@ Provide a JSON response with:
         return { success: true, ...analysis };
       }),
 
-    update: protectedProcedure
+    updateOutcome: protectedProcedure
       .input(z.object({
         id: z.number(),
-        name: z.string().optional(),
-        replyMode: z.enum(["friend", "expert"]).optional(),
         outcome: z.enum(["active", "won", "lost", "ghosted"]).optional(),
         outcomeNotes: z.string().optional(),
-        conversationStage: z.enum([
-          "first_contact", "warm_rapport", "pain_discovery",
-          "objection_resistance", "trust_reinforcement",
-          "referral_to_expert", "expert_close"
-        ]).optional(),
+        replyMode: z.enum(["friend", "expert"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const { id, ...updates } = input;
-        await db.updateProspect(id, ctx.user.id, updates);
+        const updateData: Record<string, unknown> = {};
+        if (input.outcome) updateData.outcome = input.outcome;
+        if (input.outcomeNotes) updateData.outcomeNotes = input.outcomeNotes;
+        if (input.replyMode) updateData.replyMode = input.replyMode;
+        await db.updateProspect(input.id, ctx.user.id, updateData);
         return { success: true };
       }),
 
@@ -343,16 +477,9 @@ Provide a JSON response with:
         await db.deleteProspect(input.id, ctx.user.id);
         return { success: true };
       }),
-
-    // Get stats for analytics
-    stats: protectedProcedure
-      .input(z.object({ workspaceId: z.number().optional() }))
-      .query(async ({ ctx, input }) => {
-        return db.getProspectStats(ctx.user.id, input.workspaceId);
-      }),
   }),
 
-  // ============ CHAT MESSAGES (WhatsApp-style) ============
+  // ============ CHAT (WhatsApp-style) ============
   chat: router({
     getMessages: protectedProcedure
       .input(z.object({ prospectId: z.number() }))
@@ -360,24 +487,21 @@ Provide a JSON response with:
         return db.getChatMessages(input.prospectId, ctx.user.id);
       }),
 
-    // Upload screenshot and extract text via OCR
     uploadScreenshot: protectedProcedure
       .input(z.object({
-        prospectId: z.number(),
-        fileBase64: z.string(),
+        imageBase64: z.string(),
         fileName: z.string(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const buffer = Buffer.from(input.fileBase64, "base64");
+        const buffer = Buffer.from(input.imageBase64, "base64");
         const fileKey = `${ctx.user.id}/screenshots/${nanoid()}-${input.fileName}`;
         const { url } = await storagePut(fileKey, buffer, "image/png");
 
-        // OCR the screenshot
-        const response = await invokeLLM({
+        const response = await callLLMWithRetry({
           messages: [
-            { role: "system", content: "You are an OCR assistant. Extract all visible text from this screenshot of a conversation. Preserve the conversation structure, indicating who said what if possible. Return only the extracted text, no commentary." },
+            { role: "system", content: "Extract all text from this screenshot. Return only the text content, preserving the conversation structure." },
             { role: "user", content: [
-              { type: "text", text: "Extract all text from this conversation screenshot:" },
+              { type: "text", text: "Extract the text from this conversation screenshot:" },
               { type: "image_url", image_url: { url, detail: "high" } }
             ] },
           ],
@@ -389,7 +513,41 @@ Provide a JSON response with:
         return { url, extractedText };
       }),
 
-    // Send inbound message (from prospect) and get AI suggestions
+    // Import existing conversation (for prospects who already messaged but didn't reply)
+    importConversation: protectedProcedure
+      .input(z.object({
+        prospectId: z.number(),
+        conversationText: z.string().min(1),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const prospect = await db.getProspect(input.prospectId, ctx.user.id);
+        if (!prospect) throw new Error("Prospect not found");
+
+        // Parse the conversation and create messages
+        const lines = input.conversationText.split('\n').filter(l => l.trim());
+        
+        for (const line of lines) {
+          // Try to detect if it's from prospect or user
+          const isFromProspect = line.toLowerCase().startsWith('them:') || 
+                                  line.toLowerCase().startsWith('prospect:') ||
+                                  line.toLowerCase().startsWith(`${prospect.name.toLowerCase()}:`);
+          
+          const content = line.replace(/^(them|prospect|me|you|[^:]+):\s*/i, '').trim();
+          if (!content) continue;
+
+          await db.createChatMessage({
+            prospectId: input.prospectId,
+            userId: ctx.user.id,
+            direction: isFromProspect ? "inbound" : "outbound",
+            content,
+            wasSent: true,
+          });
+        }
+
+        return { success: true, message: "Conversation imported successfully" };
+      }),
+
+    // Send inbound message and get AI suggestions with RAG
     sendInbound: protectedProcedure
       .input(z.object({
         prospectId: z.number(),
@@ -400,21 +558,61 @@ Provide a JSON response with:
         const prospect = await db.getProspect(input.prospectId, ctx.user.id);
         if (!prospect) throw new Error("Prospect not found");
 
-        // Get workspace context
         const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
-        
-        // Get conversation history
         const conversationContext = await db.getConversationContext(input.prospectId, ctx.user.id);
         
-        // Get knowledge base content
+        // First, detect the conversation stage/context
+        const stageDetection = await callLLMWithRetry({
+          messages: [
+            { role: "system", content: "Analyze this sales conversation and determine the current stage." },
+            { role: "user", content: `Previous conversation:\n${conversationContext || "None"}\n\nLatest message: ${input.content}\n\nWhat stage is this conversation in? Reply with one of: first_contact, warm_rapport, pain_discovery, objection_resistance, trust_reinforcement, referral_to_expert, expert_close, general` },
+          ],
+        });
+        const stageContent = stageDetection.choices[0]?.message?.content;
+        const detectedStage = typeof stageContent === 'string' ? stageContent.trim().toLowerCase() : 'general';
+
+        // Get relevant knowledge chunks based on conversation stage
+        const relevantCategories = getRelevantCategories(detectedStage);
+        const knowledgeChunks = await db.searchKnowledgeChunks(
+          ctx.user.id,
+          relevantCategories,
+          prospect.replyMode || "friend",
+          8
+        );
+
+        // Also get general knowledge items for context
         const knowledgeItems = await db.getReadyKnowledgeBaseContent(
           ctx.user.id, 
           prospect.replyMode || "friend",
           prospect.workspaceId
         );
-        const knowledgeContext = knowledgeItems.map(k => 
-          `[${k.title}]: ${k.comprehensiveSummary || k.fullContent || ''}`
-        ).join("\n\n");
+
+        // Build comprehensive knowledge context
+        let knowledgeContext = "";
+        
+        if (knowledgeChunks.length > 0) {
+          knowledgeContext += "SPECIFIC KNOWLEDGE FOR THIS SITUATION:\n";
+          knowledgeContext += knowledgeChunks.map(c => `• [${c.category.replace(/_/g, ' ').toUpperCase()}]: ${c.content}`).join("\n");
+          knowledgeContext += "\n\n";
+        }
+
+        if (knowledgeItems.length > 0) {
+          knowledgeContext += "GENERAL SALES KNOWLEDGE:\n";
+          for (const item of knowledgeItems.slice(0, 3)) {
+            if (item.objectionFrameworks && detectedStage.includes('objection')) {
+              knowledgeContext += `• Objection Handling: ${item.objectionFrameworks}\n`;
+            }
+            if (item.rapportTechniques && (detectedStage.includes('rapport') || detectedStage.includes('first'))) {
+              knowledgeContext += `• Rapport Building: ${item.rapportTechniques}\n`;
+            }
+            if (item.closingTechniques && detectedStage.includes('close')) {
+              knowledgeContext += `• Closing: ${item.closingTechniques}\n`;
+            }
+            if (item.languagePatterns) {
+              knowledgeContext += `• Language Patterns: ${item.languagePatterns}\n`;
+            }
+          }
+        }
 
         // Create the inbound message
         const messageId = await db.createChatMessage({
@@ -425,13 +623,12 @@ Provide a JSON response with:
           screenshotUrl: input.screenshotUrl,
         });
 
-        // Determine mode instructions
         const modeInstructions = prospect.replyMode === "expert" 
           ? EXPERT_MODE_INSTRUCTIONS 
           : FRIEND_MODE_INSTRUCTIONS;
 
-        // Generate AI suggestions
-        const analysisPrompt = `You are a sales conversation coach helping someone craft the perfect reply.
+        // Generate AI suggestions with full knowledge context
+        const analysisPrompt = `You are a sales conversation coach. Use ALL the knowledge provided to craft the perfect reply.
 
 ${modeInstructions}
 
@@ -443,9 +640,9 @@ PROSPECT CONTEXT:
 Name: ${prospect.name}
 Profile: ${prospect.profileAnalysis || "Not analyzed"}
 Interests: ${prospect.detectedInterests || "Unknown"}
-Current Stage: ${prospect.conversationStage}
+Current Stage: ${detectedStage}
 
-${knowledgeContext ? `YOUR SALES KNOWLEDGE BASE:\n${knowledgeContext}\n\n` : ""}
+${knowledgeContext ? `YOUR SALES TRAINING KNOWLEDGE (USE THIS!):\n${knowledgeContext}\n` : ""}
 
 CONVERSATION HISTORY:
 ${conversationContext || "This is the first message"}
@@ -453,23 +650,13 @@ ${conversationContext || "This is the first message"}
 LATEST MESSAGE FROM PROSPECT:
 ${input.content}
 
-Analyze this message and provide reply suggestions. Consider:
-1. What stage of the conversation is this?
-2. What is the prospect's emotional state?
-3. What would be the most effective response?
+IMPORTANT: You MUST use the knowledge provided above to craft your responses. Reference specific techniques, phrases, and strategies from your training.
 
-Provide a JSON response with:
-- contextType: The conversation stage
-- detectedTone: The prospect's current tone/mood
-- primaryReply: Your best suggested reply
-- alternativeReply: A different approach
-- softReply: A gentler/more cautious version
-- whyThisWorks: Brief explanation of why the primary reply works
-- pushyWarning: If any reply might sound pushy, explain why (or null)`;
+Analyze this message and provide reply suggestions based on your training.`;
 
-        const response = await invokeLLM({
+        const response = await callLLMWithRetry({
           messages: [
-            { role: "system", content: "You are an expert sales coach. Always respond with valid JSON only." },
+            { role: "system", content: "You are an expert sales coach. Use the knowledge base provided to craft responses. Always respond with valid JSON only." },
             { role: "user", content: analysisPrompt },
           ],
           response_format: {
@@ -486,9 +673,10 @@ Provide a JSON response with:
                   alternativeReply: { type: "string" },
                   softReply: { type: "string" },
                   whyThisWorks: { type: "string" },
+                  knowledgeUsed: { type: "string", description: "Which knowledge from the training was used" },
                   pushyWarning: { type: ["string", "null"] },
                 },
-                required: ["contextType", "detectedTone", "primaryReply", "alternativeReply", "softReply", "whyThisWorks", "pushyWarning"],
+                required: ["contextType", "detectedTone", "primaryReply", "alternativeReply", "softReply", "whyThisWorks", "knowledgeUsed", "pushyWarning"],
                 additionalProperties: false,
               },
             },
@@ -498,12 +686,10 @@ Provide a JSON response with:
         const analysisContent = response.choices[0]?.message?.content;
         const analysis = JSON.parse(typeof analysisContent === 'string' ? analysisContent : '{}');
 
-        // Update the message with analysis
         await db.updateProspect(input.prospectId, ctx.user.id, {
           conversationStage: analysis.contextType as any,
         });
 
-        // Create suggestion records
         const suggestions = [];
         
         const primaryId = await db.createAiSuggestion({
@@ -512,10 +698,10 @@ Provide a JSON response with:
           userId: ctx.user.id,
           suggestionText: analysis.primaryReply,
           suggestionType: "primary",
-          whyThisWorks: analysis.whyThisWorks,
+          whyThisWorks: `${analysis.whyThisWorks}\n\nKnowledge Used: ${analysis.knowledgeUsed}`,
           pushyWarning: analysis.pushyWarning,
         });
-        suggestions.push({ id: primaryId, type: "primary", text: analysis.primaryReply, whyThisWorks: analysis.whyThisWorks });
+        suggestions.push({ id: primaryId, type: "primary", text: analysis.primaryReply, whyThisWorks: analysis.whyThisWorks, knowledgeUsed: analysis.knowledgeUsed });
 
         const altId = await db.createAiSuggestion({
           messageId,
@@ -541,17 +727,17 @@ Provide a JSON response with:
             contextType: analysis.contextType,
             detectedTone: analysis.detectedTone,
             pushyWarning: analysis.pushyWarning,
+            knowledgeUsed: analysis.knowledgeUsed,
           },
           suggestions,
         };
       }),
 
-    // Record outbound message (what user actually sent)
     sendOutbound: protectedProcedure
       .input(z.object({
         prospectId: z.number(),
         content: z.string().min(1),
-        suggestionId: z.number().optional(), // If they used an AI suggestion
+        suggestionId: z.number().optional(),
         isAiSuggestion: z.boolean().default(false),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -564,7 +750,6 @@ Provide a JSON response with:
           wasSent: true,
         });
 
-        // Mark suggestion as used if provided
         if (input.suggestionId) {
           await db.updateAiSuggestionUsage(input.suggestionId, ctx.user.id, true);
         }
@@ -572,14 +757,12 @@ Provide a JSON response with:
         return { messageId, success: true };
       }),
 
-    // Get suggestions for a specific message
     getSuggestions: protectedProcedure
       .input(z.object({ messageId: z.number() }))
       .query(async ({ ctx, input }) => {
         return db.getAiSuggestions(input.messageId, ctx.user.id);
       }),
 
-    // Provide feedback on a suggestion
     suggestionFeedback: protectedProcedure
       .input(z.object({
         id: z.number(),
@@ -591,7 +774,7 @@ Provide a JSON response with:
       }),
   }),
 
-  // ============ KNOWLEDGE BASE ============
+  // ============ KNOWLEDGE BASE WITH RAG ============
   knowledgeBase: router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.number().optional() }))
@@ -605,7 +788,6 @@ Provide a JSON response with:
         return db.getKnowledgeBaseItem(input.id, ctx.user.id);
       }),
 
-    // Add URL (YouTube, Instagram, TikTok, etc.)
     addUrl: protectedProcedure
       .input(z.object({
         title: z.string().min(1),
@@ -649,7 +831,7 @@ Provide a JSON response with:
         return { id, url, success: true };
       }),
 
-    // Deep learning process - reads entire content and extracts everything
+    // Deep learning process with RAG chunk extraction
     processItem: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
@@ -658,47 +840,15 @@ Provide a JSON response with:
 
         await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
           status: "processing",
-          processingProgress: 10,
+          processingProgress: 5,
         });
-
-        // Helper function to call LLM with retry logic
-        async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetries = 2): Promise<ReturnType<typeof invokeLLM>> {
-          let lastError: Error | null = null;
-          for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            try {
-              const result = await invokeLLM(params);
-              // Validate response structure
-              if (!result || !result.choices || !Array.isArray(result.choices)) {
-                throw new Error("Invalid response structure from AI service");
-              }
-              return result;
-            } catch (error) {
-              lastError = error instanceof Error ? error : new Error(String(error));
-              const errorMsg = lastError.message;
-              
-              // Check for HTML error response (service unavailable)
-              if (errorMsg.includes("<html") || errorMsg.includes("<!DOCTYPE") || errorMsg.includes("not valid JSON")) {
-                console.error(`LLM service unavailable (attempt ${attempt + 1}):`, "Service returned HTML error page");
-                lastError = new Error("AI service is temporarily unavailable. Please try again in a few minutes.");
-              } else {
-                console.error(`LLM call attempt ${attempt + 1} failed:`, errorMsg);
-              }
-              
-              if (attempt < maxRetries) {
-                // Wait before retry (exponential backoff: 2s, 4s, 8s)
-                const waitTime = 2000 * Math.pow(2, attempt);
-                console.log(`Retrying in ${waitTime/1000}s...`);
-                await new Promise(resolve => setTimeout(resolve, waitTime));
-              }
-            }
-          }
-          throw lastError || new Error("AI service failed after multiple retries. Please try again later.");
-        }
 
         try {
           let fullContent = "";
 
           // Step 1: Extract full content
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 10 });
+
           if (item.type === "url") {
             const platform = item.platform || detectPlatform(item.sourceUrl);
             
@@ -706,23 +856,29 @@ Provide a JSON response with:
               messages: [
                 { 
                   role: "system", 
-                  content: `You are a content analyzer. Extract key insights from this ${platform} content.` 
+                  content: `You are a sales training content analyzer. Extract EVERYTHING from this ${platform} content that could help someone become better at sales conversations. Be thorough and detailed.` 
                 },
                 { 
                   role: "user", 
-                  content: `Analyze this ${platform} content:
+                  content: `Analyze this ${platform} content completely:
 Title: ${item.title}
 URL: ${item.sourceUrl}
 
-Extract the key learnings including:
-- Sales techniques and methodologies
-- Specific phrases and word choices
-- Objection handling approaches
-- Conversation frameworks
-- Psychology principles
+Extract ALL learnings including:
+- Sales techniques and methodologies (step by step)
+- Specific phrases, scripts, and word choices to use
+- Objection handling approaches with examples
+- Conversation frameworks and structures
+- Psychology principles and why they work
 - Rapport and trust building techniques
-- Closing techniques
-- Language patterns` 
+- Closing techniques and when to use them
+- Language patterns that convert
+- Emotional triggers and how to use them
+- Opening lines and first message strategies
+- Pain discovery questions
+- Story frameworks
+
+Be as detailed as possible. Include specific examples and scripts.` 
                 },
               ],
             });
@@ -731,20 +887,27 @@ Extract the key learnings including:
           } else if (item.type === "pdf") {
             const pdfResponse = await callLLMWithRetry({
               messages: [
-                { role: "system", content: "You are a book analyzer. Extract key techniques and principles from this document for a sales knowledge base." },
+                { role: "system", content: "You are a sales training book analyzer. Read this ENTIRE document and extract EVERYTHING that could help someone become better at sales. Be extremely thorough." },
                 { role: "user", content: [
-                  { type: "text", text: `Analyze this PDF and extract key learnings:
+                  { type: "text", text: `Read this entire PDF from start to finish and extract ALL sales knowledge:
 Title: ${item.title}
 
-Focus on:
-- Sales techniques and methodologies
-- Specific phrases and scripts
-- Objection handling approaches
+Extract EVERYTHING including:
+- Sales techniques and methodologies (step by step)
+- Specific phrases, scripts, and word choices
+- Objection handling with examples
 - Conversation frameworks
 - Psychology principles
 - Rapport and trust building
 - Closing techniques
-- Language patterns` },
+- Language patterns
+- Emotional triggers
+- Opening lines
+- Pain discovery questions
+- Story frameworks
+- Case studies and examples
+
+Be as detailed as possible. This is training material for a sales AI.` },
                   { type: "file_url", file_url: { url: item.sourceUrl, mime_type: "application/pdf" } }
                 ] },
               ],
@@ -755,29 +918,29 @@ Focus on:
 
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
             fullContent,
-            processingProgress: 50,
+            processingProgress: 40,
           });
 
-          // If no content was extracted, create a basic summary
           if (!fullContent || fullContent.trim().length === 0) {
-            fullContent = `Content from: ${item.title}. Unable to extract detailed content - the source may require manual review.`;
+            fullContent = `Content from: ${item.title}. Unable to extract detailed content.`;
           }
 
-          // Truncate content if too long to avoid token limits
-          const maxContentLength = 8000;
+          const maxContentLength = 12000;
           const truncatedContent = fullContent.length > maxContentLength 
             ? fullContent.substring(0, maxContentLength) + "... [content truncated]"
             : fullContent;
 
-          // Step 2: Generate structured summary of what was learned
+          // Step 2: Generate structured summary
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 50 });
+
           const summaryResponse = await callLLMWithRetry({
             messages: [
-              { role: "system", content: "You are a sales training expert. Organize the content into structured categories. Always provide helpful content even if the source material is limited." },
-              { role: "user", content: `Based on this content, provide a structured summary:
+              { role: "system", content: "You are a sales training expert. Organize the content into structured categories for a sales AI knowledge base." },
+              { role: "user", content: `Based on this content, provide a comprehensive structured summary:
 
 ${truncatedContent}
 
-Provide a JSON response with information for each category:` },
+Provide detailed information for each category:` },
             ],
             response_format: {
               type: "json_schema",
@@ -789,7 +952,7 @@ Provide a JSON response with information for each category:` },
                   properties: {
                     comprehensiveSummary: { type: "string", description: "Overall summary of what was learned" },
                     salesPsychology: { type: "string", description: "Psychology principles and insights" },
-                    rapportTechniques: { type: "string", description: "Techniques for building rapport" },
+                    rapportTechniques: { type: "string", description: "Rapport building techniques" },
                     conversationStarters: { type: "string", description: "Opening lines and first message strategies" },
                     objectionFrameworks: { type: "string", description: "How to handle objections" },
                     closingTechniques: { type: "string", description: "Techniques for closing" },
@@ -809,7 +972,6 @@ Provide a JSON response with information for each category:` },
           try {
             summary = JSON.parse(typeof summaryContent === 'string' ? summaryContent : '{}');
           } catch {
-            // If JSON parsing fails, create a basic summary
             summary = {
               comprehensiveSummary: fullContent.substring(0, 500),
               salesPsychology: "Not extracted",
@@ -825,13 +987,98 @@ Provide a JSON response with information for each category:` },
 
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
             ...summary,
+            processingProgress: 70,
+          });
+
+          // Step 3: Extract knowledge chunks for RAG
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 75 });
+
+          // Delete any existing chunks for this source
+          await db.deleteKnowledgeChunksBySource(input.id, ctx.user.id);
+
+          const chunkResponse = await callLLMWithRetry({
+            messages: [
+              { role: "system", content: "You are a knowledge extraction expert. Extract specific, actionable pieces of knowledge that can be used in sales conversations." },
+              { role: "user", content: `Extract specific knowledge chunks from this content. Each chunk should be a standalone piece of advice, technique, phrase, or insight that can be used in sales conversations.
+
+${truncatedContent}
+
+Provide 15-25 specific knowledge chunks in JSON format:` },
+            ],
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "knowledge_chunks",
+                strict: true,
+                schema: {
+                  type: "object",
+                  properties: {
+                    chunks: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          category: { 
+                            type: "string", 
+                            enum: ["opening_lines", "rapport_building", "pain_discovery", "objection_handling", "trust_building", "closing_techniques", "psychology_insight", "language_pattern", "emotional_trigger", "general_wisdom"]
+                          },
+                          content: { type: "string", description: "The specific knowledge, technique, phrase, or insight" },
+                          triggerPhrases: { type: "string", description: "When to use this knowledge (keywords or situations)" },
+                          usageExample: { type: "string", description: "Example of how to use this in a conversation" },
+                        },
+                        required: ["category", "content", "triggerPhrases", "usageExample"],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ["chunks"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          });
+
+          const chunkContent = chunkResponse.choices[0]?.message?.content;
+          let chunksData;
+          try {
+            chunksData = JSON.parse(typeof chunkContent === 'string' ? chunkContent : '{"chunks":[]}');
+          } catch {
+            chunksData = { chunks: [] };
+          }
+
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 90 });
+
+          // Save chunks to database
+          if (chunksData.chunks && chunksData.chunks.length > 0) {
+            const chunksToInsert = chunksData.chunks.map((chunk: any) => ({
+              userId: ctx.user.id,
+              sourceId: input.id,
+              category: chunk.category,
+              content: chunk.content,
+              triggerPhrases: chunk.triggerPhrases,
+              usageExample: chunk.usageExample,
+              relevanceScore: 50,
+              brainType: item.brainType || "both",
+            }));
+
+            await db.createKnowledgeChunks(chunksToInsert);
+          }
+
+          // Update brain stats
+          await db.updateBrainStats(ctx.user.id);
+
+          await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
             status: "ready",
             processingProgress: 100,
           });
 
+          const brainStats = await db.getOrCreateBrainStats(ctx.user.id);
+
           return { 
             success: true, 
             ...summary,
+            chunksExtracted: chunksData.chunks?.length || 0,
+            brainStats,
           };
         } catch (error) {
           await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { 
@@ -851,14 +1098,41 @@ Provide a JSON response with information for each category:` },
         await db.updateKnowledgeBaseItem(input.id, ctx.user.id, {
           brainType: input.brainType,
         });
+        
+        // Also update all chunks from this source
+        const chunks = await db.getKnowledgeChunksBySource(input.id, ctx.user.id);
+        for (const chunk of chunks) {
+          // Update chunk brain type (would need a new function, but for now we'll skip)
+        }
+        
         return { success: true };
       }),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        // Delete associated chunks first
+        await db.deleteKnowledgeChunksBySource(input.id, ctx.user.id);
         await db.deleteKnowledgeBaseItem(input.id, ctx.user.id);
+        
+        // Update brain stats
+        await db.updateBrainStats(ctx.user.id);
+        
         return { success: true };
+      }),
+
+    brainStats: protectedProcedure
+      .query(async ({ ctx }) => {
+        return db.getBrainStats(ctx.user.id);
+      }),
+  }),
+
+  // ============ ANALYTICS ============
+  analytics: router({
+    getStats: protectedProcedure
+      .input(z.object({ workspaceId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        return db.getProspectStats(ctx.user.id, input.workspaceId);
       }),
   }),
 });

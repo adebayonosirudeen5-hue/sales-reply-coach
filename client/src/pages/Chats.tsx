@@ -15,7 +15,8 @@ import { useRoute, useLocation } from "wouter";
 import { 
   MessageSquare, Plus, Send, Image, User, Sparkles, 
   ThumbsUp, ThumbsDown, Copy, Check, AlertTriangle,
-  Heart, Briefcase, MoreVertical, Trash2, Edit, Target
+  Heart, Briefcase, MoreVertical, Trash2, Edit, Target,
+  Upload, RefreshCw
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -29,6 +30,8 @@ export default function Chats() {
   const [newProspectIg, setNewProspectIg] = useState("");
   const [newProspectTiktok, setNewProspectTiktok] = useState("");
   const [newProspectStore, setNewProspectStore] = useState("");
+  const [importConversation, setImportConversation] = useState("");
+  const [isReEngagement, setIsReEngagement] = useState(false);
   
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"text" | "screenshot">("text");
@@ -58,12 +61,14 @@ export default function Chats() {
 
   const createProspect = trpc.prospect.create.useMutation({
     onSuccess: (data) => {
-      toast.success("New chat created!");
+      toast.success(isReEngagement ? "Re-engagement chat created!" : "New chat created!");
       setNewProspectOpen(false);
       setNewProspectName("");
       setNewProspectIg("");
       setNewProspectTiktok("");
       setNewProspectStore("");
+      setImportConversation("");
+      setIsReEngagement(false);
       refetchProspects();
       setLocation(`/chats/${data.id}`);
     },
@@ -111,7 +116,7 @@ export default function Chats() {
     onError: (error) => toast.error(error.message),
   });
 
-  const updateProspect = trpc.prospect.update.useMutation({
+  const updateOutcome = trpc.prospect.updateOutcome.useMutation({
     onSuccess: () => {
       refetchProspect();
       refetchProspects();
@@ -140,8 +145,7 @@ export default function Chats() {
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
       uploadScreenshot.mutate({
-        prospectId: selectedProspectId,
-        fileBase64: base64,
+        imageBase64: base64,
         fileName: file.name,
       });
     };
@@ -185,6 +189,8 @@ export default function Chats() {
       instagramUrl: newProspectIg || undefined,
       tiktokUrl: newProspectTiktok || undefined,
       storeUrl: newProspectStore || undefined,
+      importedConversation: importConversation || undefined,
+      isReEngagement: isReEngagement,
     });
   };
 
@@ -260,10 +266,40 @@ export default function Chats() {
                       placeholder="https://..."
                     />
                   </div>
+                  
+                  {/* Import Conversation Section */}
+                  <div className="pt-4 border-t">
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        type="checkbox"
+                        id="isReEngagement"
+                        checked={isReEngagement}
+                        onChange={(e) => setIsReEngagement(e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <Label htmlFor="isReEngagement" className="flex items-center gap-2 cursor-pointer">
+                        <RefreshCw className="h-4 w-4 text-orange-500" />
+                        Re-engagement (they saw but didn't reply)
+                      </Label>
+                    </div>
+                    <div>
+                      <Label>Import Previous Conversation (optional)</Label>
+                      <Textarea
+                        value={importConversation}
+                        onChange={(e) => setImportConversation(e.target.value)}
+                        placeholder="Paste your previous conversation here so the AI understands the context and can suggest a re-engagement message..."
+                        rows={4}
+                        className="mt-1"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Paste the full conversation so the AI knows where you left off
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <DialogFooter>
                   <Button onClick={handleCreateProspect} disabled={!newProspectName.trim()}>
-                    Create Chat
+                    {isReEngagement ? "Create Re-engagement Chat" : "Create Chat"}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -353,7 +389,7 @@ export default function Chats() {
                   value={prospectData?.prospect.replyMode || "friend"}
                   onValueChange={(value: "friend" | "expert") => {
                     if (selectedProspectId) {
-                      updateProspect.mutate({ id: selectedProspectId, replyMode: value });
+                      updateOutcome.mutate({ id: selectedProspectId, replyMode: value });
                     }
                   }}
                 >
@@ -396,7 +432,7 @@ export default function Chats() {
                     <DropdownMenuItem
                       onClick={() => {
                         if (selectedProspectId) {
-                          updateProspect.mutate({ id: selectedProspectId, outcome: "won" });
+                          updateOutcome.mutate({ id: selectedProspectId, outcome: "won" });
                           toast.success("Marked as won!");
                         }
                       }}
@@ -406,7 +442,7 @@ export default function Chats() {
                     <DropdownMenuItem
                       onClick={() => {
                         if (selectedProspectId) {
-                          updateProspect.mutate({ id: selectedProspectId, outcome: "lost" });
+                          updateOutcome.mutate({ id: selectedProspectId, outcome: "lost" });
                           toast.success("Marked as lost");
                         }
                       }}
@@ -416,7 +452,7 @@ export default function Chats() {
                     <DropdownMenuItem
                       onClick={() => {
                         if (selectedProspectId) {
-                          updateProspect.mutate({ id: selectedProspectId, outcome: "ghosted" });
+                          updateOutcome.mutate({ id: selectedProspectId, outcome: "ghosted" });
                           toast.success("Marked as ghosted");
                         }
                       }}

@@ -9,7 +9,7 @@ import {
 
 export default function Analytics() {
   const { data: activeWorkspace } = trpc.workspace.getActive.useQuery();
-  const { data: stats } = trpc.prospect.stats.useQuery(
+  const { data: stats } = trpc.analytics.getStats.useQuery(
     { workspaceId: activeWorkspace?.id },
     { enabled: !!activeWorkspace?.id }
   );
