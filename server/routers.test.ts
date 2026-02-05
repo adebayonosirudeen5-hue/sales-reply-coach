@@ -63,7 +63,17 @@ vi.mock("./db", () => ({
     intelligenceLevel: 75,
   }),
   updateBrainStats: vi.fn().mockResolvedValue(undefined),
-}));
+  getOrCreateBrainStats: vi.fn().mockResolvedValue({
+    id: 1,
+    userId: 1,
+    totalSources: 2,
+    totalChunks: 10,
+    categoryBreakdown: {},
+    intelligenceLevel: 50,
+    intelligenceTitle: "Intermediate",
+    updatedAt: new Date(),
+  }),
+}))
 
 // Mock storage
 vi.mock("./storage", () => ({

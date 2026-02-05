@@ -265,12 +265,16 @@ export async function createChatMessage(message: InsertChatMessage) {
   return result[0].insertId;
 }
 
-export async function getChatMessages(prospectId: number, userId: number, limit = 100) {
+export async function getChatMessages(prospectId: number, userId: number, threadType: "friend" | "expert" = "friend", limit = 100) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   return db.select().from(chatMessages)
-    .where(and(eq(chatMessages.prospectId, prospectId), eq(chatMessages.userId, userId)))
+    .where(and(
+      eq(chatMessages.prospectId, prospectId),
+      eq(chatMessages.userId, userId),
+      eq(chatMessages.threadType, threadType)
+    ))
     .orderBy(chatMessages.createdAt)
     .limit(limit);
 }

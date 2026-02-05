@@ -104,6 +104,8 @@ export const chatMessages = mysqlTable("chat_messages", {
   id: int("id").autoincrement().primaryKey(),
   prospectId: int("prospectId").notNull(),
   userId: int("userId").notNull(),
+  // Thread type: friend or expert (separate chat threads)
+  threadType: mysqlEnum("threadType", ["friend", "expert"]).default("friend").notNull(),
   // Message direction: inbound (from prospect) or outbound (user's response)
   direction: mysqlEnum("direction", ["inbound", "outbound"]).notNull(),
   // The message content

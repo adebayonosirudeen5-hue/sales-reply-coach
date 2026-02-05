@@ -122,3 +122,29 @@
 - [x] Upload full conversation history for context
 - [x] AI analyzes conversation to understand where to re-engage
 - [x] Suggest re-engagement messages based on conversation history
+
+## Critical Bug Fixes (v7)
+
+### Knowledge Base Requirement
+- [x] Require knowledge base content before AI can generate replies
+- [x] Show error if user tries to get reply without trained knowledge
+- [x] Prompt user to upload books/videos first
+
+### Expert Mode Implementation
+- [ ] Fix Expert mode toggle to create separate Expert chat thread
+- [ ] Show Friend and Expert chats separately under prospect name
+- [ ] Expert chat shows "Expert Team" header with professional tone
+- [ ] Friend chat shows "Friend Mode" header with warm tone
+
+### Expert Approval Workflow
+- [ ] When prospect message arrives, show AI suggestion to expert
+- [ ] Expert can approve, edit, or provide custom message
+- [ ] Expert can add notes/context for the AI to learn from
+- [ ] Message sent only after expert approves
+
+### Continuous Learning
+- [ ] AI learns from every Friend conversation
+- [ ] AI learns from every Expert conversation
+- [ ] Conversation patterns stored as learning chunks
+- [ ] AI improves daily from combined knowledge base + conversations
+- [ ] Show learning progress in AI Brain dashboard

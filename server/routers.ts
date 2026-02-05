@@ -558,6 +558,12 @@ Provide a JSON response with:
         const prospect = await db.getProspect(input.prospectId, ctx.user.id);
         if (!prospect) throw new Error("Prospect not found");
 
+        // CHECK: Require knowledge base content before generating replies
+        const brainStats = await db.getOrCreateBrainStats(ctx.user.id);
+        if (!brainStats || (brainStats.totalChunks ?? 0) === 0) {
+          throw new Error("Your AI brain is empty! Please upload sales training books or videos first to train your AI. Go to Knowledge Base and add content.");
+        }
+
         const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
         const conversationContext = await db.getConversationContext(input.prospectId, ctx.user.id);
         
