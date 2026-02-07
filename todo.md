@@ -131,20 +131,59 @@
 - [x] Prompt user to upload books/videos first
 
 ### Expert Mode Implementation
-- [ ] Fix Expert mode toggle to create separate Expert chat thread
-- [ ] Show Friend and Expert chats separately under prospect name
-- [ ] Expert chat shows "Expert Team" header with professional tone
-- [ ] Friend chat shows "Friend Mode" header with warm tone
+- [x] Fix Expert mode toggle to create separate Expert chat thread
+- [x] Show Friend and Expert chats separately under prospect name
+- [x] Expert chat shows "Expert Team" header with professional tone
+- [x] Friend chat shows "Friend Mode" header with warm tone
 
 ### Expert Approval Workflow
-- [ ] When prospect message arrives, show AI suggestion to expert
-- [ ] Expert can approve, edit, or provide custom message
-- [ ] Expert can add notes/context for the AI to learn from
-- [ ] Message sent only after expert approves
+- [x] When prospect message arrives, show AI suggestion to expert
+- [x] Expert can approve, edit, or provide custom message
+- [x] Expert can add notes/context for the AI to learn from
+- [x] Message sent only after expert approves
 
 ### Continuous Learning
-- [ ] AI learns from every Friend conversation
-- [ ] AI learns from every Expert conversation
-- [ ] Conversation patterns stored as learning chunks
-- [ ] AI improves daily from combined knowledge base + conversations
-- [ ] Show learning progress in AI Brain dashboard
+- [x] AI learns from every Friend conversation
+- [x] AI learns from every Expert conversation
+- [x] Conversation patterns stored as learning chunks
+- [x] AI improves daily from combined knowledge base + conversations
+- [x] Show learning progress in AI Brain dashboard
+
+
+## Authentication Migration (v8) - Replace Manus OAuth with Email/Password
+
+### Database Schema Updates
+- [ ] Add password hash field to users table
+- [ ] Add email verification status field
+- [ ] Preserve existing user data during migration
+- [ ] Create password reset tokens table
+
+### Backend Authentication
+- [ ] Implement user registration endpoint (email/password)
+- [ ] Implement login endpoint with session management
+- [ ] Implement logout endpoint
+- [ ] Add password hashing with bcrypt
+- [ ] Add session/JWT token generation
+- [ ] Add password validation rules
+- [ ] Remove Manus OAuth dependencies
+
+### Frontend Authentication
+- [ ] Create login page with email/password form
+- [ ] Create signup page with email/password form
+- [ ] Update auth context to use email/password
+- [ ] Remove Manus OAuth login button
+- [ ] Add password strength indicator
+- [ ] Add form validation and error messages
+
+### Data Migration
+- [ ] Migrate existing Manus OAuth users to email/password
+- [ ] Generate temporary passwords for existing users
+- [ ] Send password reset emails to existing users
+- [ ] Preserve all workspace and prospect data
+
+### Testing
+- [ ] Test user registration flow
+- [ ] Test user login flow
+- [ ] Test logout flow
+- [ ] Verify existing workspaces and prospects still accessible
+- [ ] Test password validation

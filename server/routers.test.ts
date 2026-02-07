@@ -318,7 +318,7 @@ describe("chat", () => {
 
     await caller.chat.getMessages({ prospectId: 1 });
 
-    expect(db.getChatMessages).toHaveBeenCalledWith(1, 1);
+    expect(db.getChatMessages).toHaveBeenCalledWith(1, 1, "friend");
   });
 
   it("sends inbound message and gets AI suggestions", async () => {

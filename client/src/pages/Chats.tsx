@@ -40,6 +40,10 @@ export default function Chats() {
   const [suggestions, setSuggestions] = useState<Array<{id: number; type: string; text: string; whyThisWorks?: string}>>([]);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [pushyWarning, setPushyWarning] = useState<string | null>(null);
+  const [currentThreadType, setCurrentThreadType] = useState<"friend" | "expert">("friend");
+  const [expertMode, setExpertMode] = useState<"review" | "custom">("review");
+  const [expertInput, setExpertInput] = useState("");
+  const [expertNotes, setExpertNotes] = useState("");
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -55,7 +59,7 @@ export default function Chats() {
 
   // Get selected prospect data
   const { data: prospectData, refetch: refetchProspect } = trpc.prospect.get.useQuery(
-    { id: selectedProspectId ?? 0 },
+    { id: selectedProspectId ?? 0, threadType: currentThreadType },
     { enabled: !!selectedProspectId }
   );
 
@@ -116,6 +120,18 @@ export default function Chats() {
     onError: (error) => toast.error(error.message),
   });
 
+  const refineExpertMessage = trpc.chat.refineExpertMessage.useMutation({
+    onSuccess: (data) => {
+      setSuggestions([]);
+      setPushyWarning(null);
+      setExpertInput("");
+      setExpertNotes("");
+      refetchProspect();
+      toast.success("Message refined and sent!");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const updateOutcome = trpc.prospect.updateOutcome.useMutation({
     onSuccess: () => {
       refetchProspect();
@@ -159,6 +175,7 @@ export default function Chats() {
       prospectId: selectedProspectId,
       content: messageInput,
       screenshotUrl: screenshotUrl || undefined,
+      threadType: currentThreadType,
     });
   };
 
@@ -170,6 +187,7 @@ export default function Chats() {
       content: suggestion.text,
       suggestionId: suggestion.id,
       isAiSuggestion: true,
+      threadType: currentThreadType,
     });
   };
 
@@ -386,11 +404,11 @@ export default function Chats() {
               </div>
               <div className="flex items-center gap-2">
                 <Select
-                  value={prospectData?.prospect.replyMode || "friend"}
+                  value={currentThreadType}
                   onValueChange={(value: "friend" | "expert") => {
-                    if (selectedProspectId) {
-                      updateOutcome.mutate({ id: selectedProspectId, replyMode: value });
-                    }
+                    setCurrentThreadType(value);
+                    setSuggestions([]);
+                    setPushyWarning(null);
                   }}
                 >
                   <SelectTrigger className="w-32">
@@ -493,6 +511,31 @@ export default function Chats() {
               </div>
             )}
 
+            {/* Thread Type Header */}
+            <div className={`px-4 py-2 border-b ${
+              currentThreadType === "expert" 
+                ? "bg-blue-50 dark:bg-blue-950/20" 
+                : "bg-pink-50 dark:bg-pink-950/20"
+            }`}>
+              <div className="flex items-center gap-2">
+                {currentThreadType === "expert" ? (
+                  <>
+                    <Briefcase className="h-4 w-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      Expert Team Mode - Professional & Direct
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Heart className="h-4 w-4 text-pink-600" />
+                    <span className="text-sm font-medium text-pink-900 dark:text-pink-100">
+                      Friend Mode - Warm & Casual
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
             {/* Messages */}
             <ScrollArea className="flex-1 p-4">
               <div className="space-y-4">
@@ -528,8 +571,98 @@ export default function Chats() {
               </div>
             </ScrollArea>
 
-            {/* AI Suggestions */}
-            {suggestions.length > 0 && (
+            {/* Expert Approval Workflow (Expert Mode Only) */}
+            {currentThreadType === "expert" && suggestions.length > 0 && (
+              <div className="p-4 border-t bg-blue-50/50 dark:bg-blue-950/20">
+                <div className="mb-4">
+                  <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                    <Briefcase className="h-4 w-4 text-blue-600" />
+                    Expert Review Required
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Review the AI suggestion or provide your own message. The AI will refine it into emotionally compelling language.
+                  </p>
+                </div>
+
+                <Tabs value={expertMode} onValueChange={(v) => setExpertMode(v as "review" | "custom")}>
+                  <TabsList className="mb-3">
+                    <TabsTrigger value="review">Review AI Suggestion</TabsTrigger>
+                    <TabsTrigger value="custom">Write Custom Message</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="review" className="space-y-2">
+                    {suggestions.map((suggestion) => (
+                      <Card key={suggestion.id} className="p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <Badge variant="outline" className="mb-2 text-xs">
+                              {suggestion.type === "primary" ? "Best Reply" : 
+                               suggestion.type === "alternative" ? "Alternative" : "Softer"}
+                            </Badge>
+                            <p className="text-sm">{suggestion.text}</p>
+                            {suggestion.whyThisWorks && (
+                              <p className="text-xs text-muted-foreground mt-2">
+                                💡 {suggestion.whyThisWorks}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              onClick={() => handleUseSuggestion(suggestion)}
+                            >
+                              Approve & Send
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </TabsContent>
+
+                  <TabsContent value="custom" className="space-y-3">
+                    <div>
+                      <Label htmlFor="expertInput">Your Message</Label>
+                      <Textarea
+                        id="expertInput"
+                        placeholder="Write your message here. The AI will refine it to be emotionally compelling..."
+                        value={expertInput}
+                        onChange={(e) => setExpertInput(e.target.value)}
+                        rows={3}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="expertNotes">Context/Notes (optional)</Label>
+                      <Input
+                        id="expertNotes"
+                        placeholder="Add any context for the AI to consider..."
+                        value={expertNotes}
+                        onChange={(e) => setExpertNotes(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <Button
+                      onClick={() => {
+                        if (selectedProspectId && expertInput.trim()) {
+                          refineExpertMessage.mutate({
+                            prospectId: selectedProspectId,
+                            expertMessage: expertInput,
+                            expertNotes: expertNotes || undefined,
+                            threadType: currentThreadType,
+                          });
+                        }
+                      }}
+                      disabled={!expertInput.trim() || refineExpertMessage.isPending}
+                    >
+                      {refineExpertMessage.isPending ? "Refining..." : "Refine & Send"}
+                    </Button>
+                  </TabsContent>
+                </Tabs>
+              </div>
+            )}
+
+            {/* AI Suggestions (Friend Mode Only) */}
+            {currentThreadType === "friend" && suggestions.length > 0 && (
               <div className="p-4 border-t bg-muted/30">
                 {pushyWarning && (
                   <div className="flex items-center gap-2 text-amber-600 mb-3 text-sm">

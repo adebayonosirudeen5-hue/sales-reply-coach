@@ -279,11 +279,14 @@ Provide a JSON response with:
       }),
 
     get: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ 
+        id: z.number(),
+        threadType: z.enum(["friend", "expert"]).optional().default("friend"),
+      }))
       .query(async ({ ctx, input }) => {
         const prospect = await db.getProspect(input.id, ctx.user.id);
         if (!prospect) throw new Error("Prospect not found");
-        const messages = await db.getChatMessages(input.id, ctx.user.id);
+        const messages = await db.getChatMessages(input.id, ctx.user.id, input.threadType);
         return { prospect, messages };
       }),
 
@@ -468,6 +471,106 @@ Provide a JSON response with:
         if (input.outcomeNotes) updateData.outcomeNotes = input.outcomeNotes;
         if (input.replyMode) updateData.replyMode = input.replyMode;
         await db.updateProspect(input.id, ctx.user.id, updateData);
+
+        // CONTINUOUS LEARNING: Extract patterns from won conversations
+        if (input.outcome === "won") {
+          const prospect = await db.getProspect(input.id, ctx.user.id);
+          if (prospect) {
+            // Get all messages from this conversation (both friend and expert threads)
+            const friendMessages = await db.getChatMessages(input.id, ctx.user.id, "friend");
+            const expertMessages = await db.getChatMessages(input.id, ctx.user.id, "expert");
+            const allMessages = [...friendMessages, ...expertMessages];
+
+            if (allMessages.length > 0) {
+              const conversationText = allMessages
+                .map(m => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
+                .join("\n");
+
+              // Extract learning patterns using AI
+              try {
+                const learningResponse = await callLLMWithRetry({
+                  messages: [
+                    {
+                      role: "system",
+                      content: "You are a sales coach analyzing successful conversations to extract reusable patterns and strategies."
+                    },
+                    {
+                      role: "user",
+                      content: `Analyze this SUCCESSFUL sales conversation and extract 3-5 key patterns or strategies that led to success.
+
+Conversation:
+${conversationText}
+
+Outcome Notes: ${input.outcomeNotes || "None"}
+
+For each pattern, provide:
+1. The specific technique or approach used
+2. Why it worked
+3. How to apply it in future conversations
+
+Return as JSON array with fields: technique, why_it_worked, how_to_apply`
+                    }
+                  ],
+                  response_format: {
+                    type: "json_schema",
+                    json_schema: {
+                      name: "learning_patterns",
+                      strict: true,
+                      schema: {
+                        type: "object",
+                        properties: {
+                          patterns: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                technique: { type: "string" },
+                                why_it_worked: { type: "string" },
+                                how_to_apply: { type: "string" },
+                              },
+                              required: ["technique", "why_it_worked", "how_to_apply"],
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        required: ["patterns"],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                });
+
+                const learningContent = learningResponse.choices[0]?.message?.content;
+                const learning = JSON.parse(typeof learningContent === 'string' ? learningContent : '{}');
+
+                // Store each pattern as a knowledge chunk
+                if (learning.patterns && Array.isArray(learning.patterns)) {
+                  for (let i = 0; i < learning.patterns.length; i++) {
+                    const pattern = learning.patterns[i];
+                    const chunkContent = `${pattern.technique}\n\nWhy it worked: ${pattern.why_it_worked}\n\nHow to apply: ${pattern.how_to_apply}`;
+                    
+                    await db.createKnowledgeChunk({
+                      userId: ctx.user.id,
+                      sourceId: 0, // No source, this is from conversation learning
+                      category: "general_wisdom",
+                      content: chunkContent,
+                      brainType: "both",
+                      triggerPhrases: pattern.technique,
+                      relevanceScore: 80, // High relevance for learned patterns
+                    });
+                  }
+
+                  // Update brain stats
+                  await db.updateBrainStats(ctx.user.id);
+                }
+              } catch (error) {
+                console.error("[Learning] Failed to extract patterns:", error);
+                // Don't fail the outcome update if learning extraction fails
+              }
+            }
+          }
+        }
+
         return { success: true };
       }),
 
@@ -482,9 +585,12 @@ Provide a JSON response with:
   // ============ CHAT (WhatsApp-style) ============
   chat: router({
     getMessages: protectedProcedure
-      .input(z.object({ prospectId: z.number() }))
+      .input(z.object({ 
+        prospectId: z.number(),
+        threadType: z.enum(["friend", "expert"]).optional().default("friend"),
+      }))
       .query(async ({ ctx, input }) => {
-        return db.getChatMessages(input.prospectId, ctx.user.id);
+        return db.getChatMessages(input.prospectId, ctx.user.id, input.threadType);
       }),
 
     uploadScreenshot: protectedProcedure
@@ -553,6 +659,7 @@ Provide a JSON response with:
         prospectId: z.number(),
         content: z.string().min(1),
         screenshotUrl: z.string().optional(),
+        threadType: z.enum(["friend", "expert"]).optional().default("friend"),
       }))
       .mutation(async ({ ctx, input }) => {
         const prospect = await db.getProspect(input.prospectId, ctx.user.id);
@@ -627,6 +734,7 @@ Provide a JSON response with:
           direction: "inbound",
           content: input.content,
           screenshotUrl: input.screenshotUrl,
+          threadType: input.threadType,
         });
 
         const modeInstructions = prospect.replyMode === "expert" 
@@ -745,6 +853,7 @@ Analyze this message and provide reply suggestions based on your training.`;
         content: z.string().min(1),
         suggestionId: z.number().optional(),
         isAiSuggestion: z.boolean().default(false),
+        threadType: z.enum(["friend", "expert"]).optional().default("friend"),
       }))
       .mutation(async ({ ctx, input }) => {
         const messageId = await db.createChatMessage({
@@ -754,6 +863,7 @@ Analyze this message and provide reply suggestions based on your training.`;
           content: input.content,
           isAiSuggestion: input.isAiSuggestion,
           wasSent: true,
+          threadType: input.threadType,
         });
 
         if (input.suggestionId) {
@@ -777,6 +887,81 @@ Analyze this message and provide reply suggestions based on your training.`;
       .mutation(async ({ ctx, input }) => {
         await db.updateAiSuggestionFeedback(input.id, ctx.user.id, input.feedback);
         return { success: true };
+      }),
+
+    refineExpertMessage: protectedProcedure
+      .input(z.object({
+        prospectId: z.number(),
+        expertMessage: z.string().min(1),
+        expertNotes: z.string().optional(),
+        threadType: z.enum(["friend", "expert"]).default("expert"),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const prospect = await db.getProspect(input.prospectId, ctx.user.id);
+        if (!prospect) throw new Error("Prospect not found");
+
+        const workspace = await db.getWorkspace(prospect.workspaceId, ctx.user.id);
+        const conversationContext = await db.getConversationContext(input.prospectId, ctx.user.id);
+
+        // Get relevant knowledge chunks
+        const knowledgeChunks = await db.searchKnowledgeChunks(
+          ctx.user.id,
+          ["closing_techniques", "objection_handling", "psychology_insight"],
+          "expert",
+          5
+        );
+        const knowledgeContext = knowledgeChunks.length > 0
+          ? `\n\nYOUR LEARNED KNOWLEDGE:\n${knowledgeChunks.map(c => `[${c.category}]: ${c.content}`).join("\n")}`
+          : "";
+
+        const refinementPrompt = `You are an expert sales coach refining a message from a sales expert.
+
+CONTEXT:
+Workspace: ${workspace?.nicheDescription || "Not specified"}
+Prospect: ${prospect.name}
+Conversation History:
+${conversationContext || "No previous conversation"}
+
+EXPERT'S MESSAGE:
+${input.expertMessage}
+
+${input.expertNotes ? `EXPERT'S NOTES:\n${input.expertNotes}\n` : ""}
+${knowledgeContext}
+
+Your task: Refine the expert's message to be emotionally compelling, persuasive, and impossible to say no to. Keep the expert's core intent but enhance it with:
+1. Emotional triggers and psychological principles
+2. Urgency and scarcity where appropriate
+3. Social proof or authority
+4. Clear call-to-action
+5. Professional yet warm tone
+
+Return ONLY the refined message, ready to send.`;
+
+        const response = await callLLMWithRetry({
+          messages: [
+            { role: "system", content: "You are an expert sales message refiner. Return only the refined message, nothing else." },
+            { role: "user", content: refinementPrompt },
+          ],
+        });
+
+        const refinedMessage = response.choices[0]?.message?.content || input.expertMessage;
+
+        // Save the refined message as outbound
+        const messageId = await db.createChatMessage({
+          prospectId: input.prospectId,
+          userId: ctx.user.id,
+          direction: "outbound",
+          content: typeof refinedMessage === 'string' ? refinedMessage : input.expertMessage,
+          isAiSuggestion: true,
+          wasSent: true,
+          threadType: input.threadType,
+        });
+
+        return { 
+          messageId, 
+          refinedMessage: typeof refinedMessage === 'string' ? refinedMessage : input.expertMessage,
+          success: true 
+        };
       }),
   }),
 
@@ -1138,7 +1323,20 @@ Provide 15-25 specific knowledge chunks in JSON format:` },
     getStats: protectedProcedure
       .input(z.object({ workspaceId: z.number().optional() }))
       .query(async ({ ctx, input }) => {
-        return db.getProspectStats(ctx.user.id, input.workspaceId);
+        const workspaceId = input.workspaceId || (await db.getActiveWorkspace(ctx.user.id))?.id;
+        if (!workspaceId) {
+          return {
+            total: 0,
+            won: 0,
+            lost: 0,
+            ghosted: 0,
+            active: 0,
+            conversionRate: 0,
+            friendMode: { total: 0, won: 0, conversionRate: 0 },
+            expertMode: { total: 0, won: 0, conversionRate: 0 },
+          };
+        }
+        return db.getProspectStats(workspaceId, ctx.user.id);
       }),
   }),
 });
