@@ -325,3 +325,20 @@ export const aiBrainStats = mysqlTable("ai_brain_stats", {
 
 export type AIBrainStats = typeof aiBrainStats.$inferSelect;
 export type InsertAIBrainStats = typeof aiBrainStats.$inferInsert;
+
+/**
+ * Email verification codes for signup
+ */
+export const verificationCodes = mysqlTable("verificationCodes", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 320 }).notNull(),
+  code: varchar("code", { length: 6 }).notNull(),
+  password: text("password").notNull(), // Temporary storage until verified
+  name: text("name").notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  verified: boolean("verified").default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type InsertVerificationCode = typeof verificationCodes.$inferInsert;

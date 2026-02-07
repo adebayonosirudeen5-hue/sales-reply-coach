@@ -372,6 +372,99 @@ export const appRouter = router({
 
         return { success: true, user };
       }),
+    sendVerificationCode: publicProcedure
+      .input(z.object({ 
+        email: z.string().email(), 
+        password: z.string().min(6),
+        name: z.string()
+      }))
+      .mutation(async ({ input }) => {        const { generateVerificationCode, sendVerificationEmail } = await import("./_core/email");
+        const { verificationCodes } = await import("../drizzle/schema");
+        const { getDb } = await import("./db");
+        const database = await getDb();
+        if (!database) throw new Error("Database not available");
+        
+        // Check if email already exists
+        const existingUser = await db.getUserByEmail(input.email);
+        if (existingUser) {
+          throw new Error("Email already registered");
+        }
+        
+        // Generate 6-digit code
+        const code = generateVerificationCode();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+        
+        // Store code in database with password and name
+        await database.insert(verificationCodes).values({
+          email: input.email,
+          code,
+          password: input.password, // Stored temporarily until verified
+          name: input.name,
+          expiresAt,
+          verified: false,
+        });
+        
+        // Send email
+        const sent = await sendVerificationEmail(input.email, code);
+        if (!sent) {
+          throw new Error("Failed to send verification email");
+        }
+        
+        return { success: true };
+      }),
+    verifyCode: publicProcedure
+      .input(z.object({ 
+        email: z.string().email(), 
+        code: z.string().length(6)
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const { verificationCodes } = await import("../drizzle/schema");
+        const { getDb } = await import("./db");
+        const database = await getDb();
+        if (!database) throw new Error("Database not available");
+        const { eq, and } = await import("drizzle-orm");
+        
+        // Find verification code
+        const [verification] = await database
+          .select()
+          .from(verificationCodes)
+          .where(
+            and(
+              eq(verificationCodes.email, input.email),
+              eq(verificationCodes.code, input.code),
+              eq(verificationCodes.verified, false)
+            )
+          )
+          .limit(1);
+        
+        if (!verification) {
+          throw new Error("Invalid verification code");
+        }
+        
+        if (new Date() > verification.expiresAt) {
+          throw new Error("Verification code expired");
+        }
+        
+        // Create Supabase account
+        const { signUpWithEmail } = await import("../client/src/lib/supabase");
+        try {
+          await signUpWithEmail({
+            email: verification.email,
+            password: verification.password,
+            name: verification.name,
+          });
+        } catch (error: any) {
+          throw new Error(`Failed to create account: ${error.message}`);
+        }
+        
+        // Mark as verified
+        await database
+          .update(verificationCodes)
+          .set({ verified: true })
+          .where(eq(verificationCodes.id, verification.id));
+        
+        return { success: true };
+      }),
   }),
 
   // ============ AI BRAIN STATS ============

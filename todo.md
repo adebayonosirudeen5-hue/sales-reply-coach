@@ -223,3 +223,16 @@
 - [x] Highlight emotional triggers that lead to "yes"
 - [x] Track which approaches work best for different prospects
 - [x] Visualize learning progress over time
+
+
+## Email Verification Code System (v9)
+- [x] Disable Supabase email confirmation link
+- [x] Create verification_codes table in database
+- [x] Generate 6-digit verification code on signup
+- [x] Send verification code via professional email template
+- [x] Add code input field to signup page
+- [x] Implement code verification endpoint
+- [x] Auto-verify user account when code is correct
+- [x] Add code expiration (10 minutes)
+- [x] Add resend code functionality
+- [x] Design professional email template with branding
