@@ -187,3 +187,39 @@
 - [ ] Test logout flow
 - [ ] Verify existing workspaces and prospects still accessible
 - [ ] Test password validation
+
+
+## Supabase Authentication Integration (Primary Auth Method)
+- [x] Set up Supabase authentication secrets (URL, anon key, service key)
+- [x] Create Supabase auth helper functions (signUp, signIn, signOut)
+- [x] Build email/password sign up form UI
+- [x] Build email/password login form UI
+- [x] Integrate Supabase auth with backend session management
+- [x] Keep Manus OAuth as alternative sign-in method
+- [x] Test both authentication methods work together
+
+## Enhanced Continuous Learning (Every Conversation)
+- [x] Analyze every conversation (not just won) to extract patterns
+- [x] Identify audience types and what motivates them
+- [x] Detect needs, pain points, and emotional triggers
+- [x] Learn what prospects don't like to hear
+- [x] Extract strategic questioning patterns (general → specific)
+- [x] Implement "buyers buy for their reasons" principle
+- [x] Accurate need identification through AI analysis
+- [x] Store learning insights as knowledge chunks for future use
+
+## Strategic Questioning System
+- [x] Implement question generation that moves from general to specific
+- [x] Questions should help prospect realize they need expert help
+- [x] Friend mode: relate as someone in same industry/niche
+- [x] Expert mode: demonstrate substantial value improvement
+- [x] Final question closes prospect to reach out to expert team
+- [x] Store successful question sequences for reuse
+
+## Conversation Analytics Dashboard
+- [x] Create analytics page showing conversation metrics
+- [x] Display win rate by audience type
+- [x] Show most effective questioning patterns
+- [x] Highlight emotional triggers that lead to "yes"
+- [x] Track which approaches work best for different prospects
+- [x] Visualize learning progress over time

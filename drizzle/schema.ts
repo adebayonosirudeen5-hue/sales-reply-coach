@@ -281,7 +281,11 @@ export const knowledgeChunks = mysqlTable("knowledge_chunks", {
     "psychology_insight",
     "language_pattern",
     "emotional_trigger",
-    "general_wisdom"
+    "general_wisdom",
+    "audience_insight",
+    "conversation_pattern",
+    "strategic_question",
+    "need_identification"
   ]).notNull(),
   // The actual knowledge content
   content: text("content").notNull(),

@@ -6,6 +6,8 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import PWAInstallPrompt from "./components/PWAInstallPrompt";
 import Home from "./pages/Home";
+import Login from "./pages/Login";
+import SignUp from "./pages/SignUp";
 import Chats from "./pages/Chats";
 import KnowledgeBase from "./pages/KnowledgeBase";
 import Workspaces from "./pages/Workspaces";
@@ -34,6 +36,8 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/login" component={Login} />
+      <Route path="/signup" component={SignUp} />
       <Route path="/dashboard" component={AuthenticatedRoutes} />
       <Route path="/chats" component={AuthenticatedRoutes} />
       <Route path="/chats/:prospectId" component={AuthenticatedRoutes} />

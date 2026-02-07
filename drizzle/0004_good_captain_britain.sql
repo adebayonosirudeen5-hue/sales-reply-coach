@@ -1,0 +1,1 @@
+ALTER TABLE `knowledge_chunks` MODIFY COLUMN `category` enum('opening_lines','rapport_building','pain_discovery','objection_handling','trust_building','closing_techniques','psychology_insight','language_pattern','emotional_trigger','general_wisdom','audience_insight','conversation_pattern','strategic_question','need_identification') NOT NULL;

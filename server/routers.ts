@@ -7,6 +7,187 @@ import { invokeLLM } from "./_core/llm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import * as db from "./db";
+import jwt from "jsonwebtoken";
+import { ENV } from "./_core/env";
+
+// ============ CONTINUOUS LEARNING ENGINE ============
+// Runs after every conversation exchange to learn from ALL interactions
+async function analyzeAndLearnFromConversation(
+  userId: number,
+  prospectId: number,
+  latestMessage: string,
+  direction: string,
+  threadType: string
+) {
+  try {
+    // Get full conversation history
+    const messages = await db.getChatMessages(prospectId, userId, threadType as any);
+    if (messages.length < 2) return; // Need at least 2 messages to learn
+
+    const prospect = await db.getProspect(prospectId, userId);
+    if (!prospect) return;
+
+    const conversationText = messages
+      .slice(-10) // Last 10 messages for context
+      .map(m => `${m.direction === "inbound" ? "Prospect" : "You"}: ${m.content}`)
+      .join("\n");
+
+    // Only run deep analysis every 4 messages to avoid excessive API calls
+    if (messages.length % 4 !== 0) return;
+
+    const learningResponse = await callLLMWithRetry({
+      messages: [
+        {
+          role: "system",
+          content: `You are a sales intelligence engine. Analyze conversations to extract deep audience insights.
+
+Your goal is to understand:
+1. AUDIENCE TYPE: What kind of buyer is this? (stay-at-home mum, 9-5 worker, beginner, burned before, etc.)
+2. MOTIVATIONS: What drives them? What are they looking for?
+3. PAIN POINTS: What problems, frustrations, fears do they have?
+4. EMOTIONAL TRIGGERS: What words/phrases make them respond positively?
+5. RESISTANCE PATTERNS: What do they NOT want to hear? What turns them off?
+6. BUYING SIGNALS: What indicates they're moving closer to saying yes?
+7. NEED IDENTIFICATION: What specific needs have been uncovered?
+8. EFFECTIVE QUESTIONS: Which questions moved the conversation forward?
+
+Remember: Buyers buy for THEIR reasons, not yours. The app must identify needs accurately - this is the indispensable step upon which the whole sales process depends.`
+        },
+        {
+          role: "user",
+          content: `Analyze this conversation and extract learning insights:
+
+Prospect: ${prospect.name}
+Stage: ${prospect.conversationStage}
+Thread: ${threadType}
+
+Conversation:
+${conversationText}
+
+Extract insights in these categories. Return JSON.`
+        }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "conversation_learning",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              audience_insight: {
+                type: "string",
+                description: "What type of buyer this is, their background, and what motivates them"
+              },
+              pain_points: {
+                type: "string",
+                description: "Specific pain points, frustrations, and fears identified"
+              },
+              emotional_triggers: {
+                type: "string",
+                description: "Words, phrases, or approaches that triggered positive emotional responses"
+              },
+              resistance_patterns: {
+                type: "string",
+                description: "What the prospect doesn't want to hear or what turns them off"
+              },
+              effective_questions: {
+                type: "string",
+                description: "Questions that moved the conversation forward and uncovered needs"
+              },
+              need_identification: {
+                type: "string",
+                description: "Specific needs identified that make this prospect a good fit for the expert"
+              },
+              conversation_pattern: {
+                type: "string",
+                description: "What approach or pattern worked well in this conversation"
+              },
+              strategic_next_question: {
+                type: "string",
+                description: "The next strategic question to ask that moves from general to specific, helping the prospect realize they need expert help"
+              }
+            },
+            required: ["audience_insight", "pain_points", "emotional_triggers", "resistance_patterns", "effective_questions", "need_identification", "conversation_pattern", "strategic_next_question"],
+            additionalProperties: false
+          }
+        }
+      }
+    });
+
+    const content = learningResponse.choices[0]?.message?.content;
+    const insights = JSON.parse(typeof content === 'string' ? content : '{}');
+
+    // Store each insight as a knowledge chunk for future use
+    const insightMappings: Array<{ key: string; category: string; brainType: string }> = [
+      { key: "audience_insight", category: "audience_insight", brainType: "both" },
+      { key: "pain_points", category: "pain_discovery", brainType: "both" },
+      { key: "emotional_triggers", category: "emotional_trigger", brainType: "both" },
+      { key: "resistance_patterns", category: "audience_insight", brainType: "both" },
+      { key: "effective_questions", category: "strategic_question", brainType: threadType },
+      { key: "need_identification", category: "need_identification", brainType: "both" },
+      { key: "conversation_pattern", category: "conversation_pattern", brainType: threadType },
+    ];
+
+    for (const mapping of insightMappings) {
+      const value = insights[mapping.key];
+      if (value && value.length > 20) { // Only store meaningful insights
+        await db.createKnowledgeChunk({
+          userId,
+          sourceId: 0, // Learned from conversation
+          category: mapping.category as any,
+          content: `[Learned from ${prospect.name} - ${threadType} mode]: ${value}`,
+          brainType: mapping.brainType as any,
+          triggerPhrases: `${prospect.conversationStage}, ${threadType}`,
+          relevanceScore: 75,
+        });
+      }
+    }
+
+    // Update brain stats
+    await db.updateBrainStats(userId);
+    console.log(`[Learning] Extracted insights from conversation with ${prospect.name}`);
+  } catch (error) {
+    console.error("[Learning] Background analysis failed:", error);
+    // Don't throw - learning is non-blocking
+  }
+}
+
+// ============ STRATEGIC QUESTIONING SYSTEM ============
+const STRATEGIC_QUESTIONING_INSTRUCTIONS = `
+STRATEGIC QUESTIONING FRAMEWORK:
+Your replies MUST include strategic questions that move from GENERAL to SPECIFIC.
+
+The purpose: Help the prospect realize on their own that they need expert help.
+
+Question Progression:
+1. GENERAL (Rapport): "What got you interested in [their niche]?"
+2. SITUATIONAL: "How long have you been working on this?"
+3. PROBLEM-AWARE: "What's been the biggest challenge so far?"
+4. IMPACT: "How has that affected your [income/time/goals]?"
+5. NEED-PAYOFF: "If you could solve that, what would change for you?"
+6. BRIDGE TO EXPERT: "Would it help if I connected you with someone who solved exactly that?"
+
+RULES FOR QUESTIONS:
+- Each reply should end with ONE strategic question
+- Questions should feel natural, not interrogative
+- Mirror their language and emotional state
+- The question should make them THINK and FEEL
+- Never ask about buying - ask about their NEEDS and DREAMS
+- Remember: buyers buy for THEIR reasons, not yours
+- Your job is to identify their needs so accurately that contacting the expert feels like THEIR idea
+- The improvement in their life must be great enough to justify reaching out to the expert
+
+FRIEND MODE QUESTIONS (you were in their shoes):
+- "I totally get that... what made you decide to start looking into this?"
+- "That's exactly where I was... what would it mean for you if you could figure this out?"
+- "I remember feeling the same way... have you thought about what's really holding you back?"
+
+EXPERT MODE QUESTIONS (professional authority):
+- "Based on what you're telling me, it sounds like [specific need]... is that accurate?"
+- "Most people in your situation find that [insight]... does that resonate?"
+- "If we could help you achieve [their stated goal], what would that be worth to you?"
+`;
 
 // Helper to detect platform from URL
 function detectPlatform(url: string): string {
@@ -45,6 +226,27 @@ When someone shares confusion, doubt, fear, or frustration:
 3. Normalize their experience
 4. Ask a soft follow-up question
 
+STRATEGIC QUESTIONING (GENERAL → SPECIFIC):
+Every reply MUST end with ONE strategic question. Progress through these levels:
+1. RAPPORT: "What got you interested in this?" / "How long have you been exploring this?"
+2. SITUATIONAL: "What have you tried so far?" / "What does your typical day look like?"
+3. PROBLEM-AWARE: "What's been the biggest challenge?" / "What's holding you back the most?"
+4. IMPACT: "How has that affected your [income/time/goals]?" / "What would change if you solved this?"
+5. NEED-PAYOFF: "If someone showed you exactly how to fix that, would you want to know?"
+6. BRIDGE TO EXPERT: "I actually know someone who helped me with exactly this... would you be open to hearing about them?"
+
+These questions should feel natural, like a friend genuinely curious about their life.
+Mirror their language. Use their words back to them.
+The goal: The prospect realizes ON THEIR OWN that they need expert help.
+
+CORE SALES PSYCHOLOGY:
+- Buyers buy for THEIR reasons, not yours
+- You MUST identify their needs accurately - this is the step the whole process depends on
+- Take whatever time is necessary to find out exactly WHY this prospect needs expert help
+- The prospect must feel they will be SUBSTANTIALLY better off with the expert than without
+- It cannot be a small improvement - the value must clearly justify reaching out
+- If you fail to identify needs accurately, the entire sales process grinds to a halt
+
 "WHAT DID YOU USE?" RESPONSE LOGIC:
 When the user asks any variation of "What did you use?" or "How did you do it?":
 1. NEVER immediately recommend a tool, funnel, or person
@@ -55,17 +257,44 @@ When the user asks any variation of "What did you use?" or "How did you do it?":
 6. End by inviting their decision, not pushing yours`;
 
 const EXPERT_MODE_INSTRUCTIONS = `ROLE & IDENTITY:
-You are a knowledgeable professional who provides clear, direct guidance.
-You speak with authority and confidence, backed by expertise.
-You focus on solutions and value, not just rapport.
+You are a Team Legacy expert - a knowledgeable professional who provides clear, direct guidance.
+You speak with authority, confidence, and emotional intelligence, backed by deep expertise.
+You focus on solutions and value. You understand that the prospect reached this point because a friend (in Friend mode) referred them.
 
 COMMUNICATION RULES:
 - You can discuss products, services, and offers directly when relevant
 - You provide structured, actionable advice
-- You maintain professionalism while still being personable
+- You maintain professionalism while being warm and emotionally compelling
 - You can recommend specific next steps and resources
-- Be direct but not pushy
-- Focus on value and outcomes`;
+- Be direct but never pushy - make them FEEL the value
+- Focus on outcomes and transformation, not features
+- Use emotional language that paints a picture of their future success
+- Create urgency through value, not pressure
+
+STRATEGIC QUESTIONING (EXPERT LEVEL):
+Every reply should include strategic questions that demonstrate expertise:
+1. DIAGNOSTIC: "Based on what you're telling me, it sounds like [specific need]... is that accurate?"
+2. INSIGHT: "Most people in your situation find that [insight]... does that resonate?"
+3. VISION: "If we could help you achieve [their stated goal], what would that mean for your life?"
+4. COMMITMENT: "What would need to happen for you to feel confident about taking this step?"
+5. CLOSE: "Would it make sense for us to set up a time to walk you through exactly how this works?"
+
+CORE SALES PSYCHOLOGY:
+- Buyers buy for THEIR reasons, not yours
+- The prospect must feel SUBSTANTIALLY better off with your solution than without it
+- Identify needs so accurately that buying feels like the ONLY logical choice
+- The improvement must be great enough to justify the investment of money, time, and energy
+- People don't buy products - they buy better versions of themselves
+- Address both logical AND emotional needs
+- The prospect should feel that NOT taking action would be a bigger risk than taking action
+
+EMOTIONAL PERSUASION:
+- Paint vivid pictures of their future success
+- Reference their specific pain points (learned from Friend mode conversations)
+- Use social proof: "Others in your exact situation have..."
+- Create emotional contrast: where they are now vs where they could be
+- Make the next step feel easy and risk-free
+- Your message should be so compelling that saying no feels like leaving money on the table`;
 
 // Helper function to call LLM with retry logic
 async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetries = 2): Promise<ReturnType<typeof invokeLLM>> {
@@ -101,14 +330,14 @@ async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetr
 // Map conversation context to knowledge categories
 function getRelevantCategories(contextType: string): string[] {
   const categoryMap: Record<string, string[]> = {
-    "first_contact": ["opening_lines", "rapport_building", "psychology_insight"],
-    "warm_rapport": ["rapport_building", "pain_discovery", "language_pattern"],
-    "pain_discovery": ["pain_discovery", "emotional_trigger", "psychology_insight"],
-    "objection_resistance": ["objection_handling", "trust_building", "psychology_insight"],
-    "trust_reinforcement": ["trust_building", "language_pattern", "psychology_insight"],
-    "referral_to_expert": ["closing_techniques", "trust_building"],
-    "expert_close": ["closing_techniques", "objection_handling", "psychology_insight"],
-    "general": ["general_wisdom", "language_pattern", "psychology_insight"],
+    "first_contact": ["opening_lines", "rapport_building", "psychology_insight", "strategic_question", "audience_insight"],
+    "warm_rapport": ["rapport_building", "pain_discovery", "language_pattern", "strategic_question", "audience_insight"],
+    "pain_discovery": ["pain_discovery", "emotional_trigger", "psychology_insight", "need_identification", "audience_insight"],
+    "objection_resistance": ["objection_handling", "trust_building", "psychology_insight", "conversation_pattern", "audience_insight"],
+    "trust_reinforcement": ["trust_building", "language_pattern", "psychology_insight", "conversation_pattern"],
+    "referral_to_expert": ["closing_techniques", "trust_building", "need_identification", "strategic_question"],
+    "expert_close": ["closing_techniques", "objection_handling", "psychology_insight", "need_identification"],
+    "general": ["general_wisdom", "language_pattern", "psychology_insight", "audience_insight", "strategic_question"],
   };
   return categoryMap[contextType] || categoryMap["general"];
 }
@@ -123,6 +352,26 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+    supabaseLogin: publicProcedure
+      .input(z.object({ token: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        const { verifySupabaseToken, getOrCreateSupabaseUser } = await import("./_core/supabase-auth");
+        
+        const supabaseUser = await verifySupabaseToken(input.token);
+        if (!supabaseUser) {
+          throw new Error("Invalid Supabase token");
+        }
+
+        const user = await getOrCreateSupabaseUser(supabaseUser);
+        
+        // Create session cookie
+        const sessionData = { userId: user.id, openId: user.openId };
+        const token = jwt.sign(sessionData, ENV.cookieSecret);
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, token, cookieOptions);
+
+        return { success: true, user };
+      }),
   }),
 
   // ============ AI BRAIN STATS ============
@@ -835,6 +1084,11 @@ Analyze this message and provide reply suggestions based on your training.`;
         });
         suggestions.push({ id: softId, type: "soft", text: analysis.softReply });
 
+        // Trigger background learning (non-blocking)
+        analyzeAndLearnFromConversation(
+          ctx.user.id, input.prospectId, input.content, "inbound", input.threadType
+        ).catch(err => console.error("[Learning] Background analysis error:", err));
+
         return {
           messageId,
           analysis: {
@@ -869,6 +1123,11 @@ Analyze this message and provide reply suggestions based on your training.`;
         if (input.suggestionId) {
           await db.updateAiSuggestionUsage(input.suggestionId, ctx.user.id, true);
         }
+
+        // Trigger background learning (non-blocking)
+        analyzeAndLearnFromConversation(
+          ctx.user.id, input.prospectId, input.content, "outbound", input.threadType || "friend"
+        ).catch(err => console.error("[Learning] Background analysis error:", err));
 
         return { messageId, success: true };
       }),
@@ -1337,6 +1596,54 @@ Provide 15-25 specific knowledge chunks in JSON format:` },
           };
         }
         return db.getProspectStats(workspaceId, ctx.user.id);
+      }),
+
+    // Get learning insights from knowledge chunks
+    getLearningInsights: protectedProcedure
+      .query(async ({ ctx }) => {
+        const allChunks = await db.getAllKnowledgeChunks(ctx.user.id);
+        
+        // Count by category
+        const categoryCounts: Record<string, number> = {};
+        const learnedFromConversations: typeof allChunks = [];
+        const learnedFromContent: typeof allChunks = [];
+        
+        for (const chunk of allChunks) {
+          categoryCounts[chunk.category] = (categoryCounts[chunk.category] || 0) + 1;
+          if (chunk.sourceId === 0) {
+            learnedFromConversations.push(chunk);
+          } else {
+            learnedFromContent.push(chunk);
+          }
+        }
+
+        // Get audience insights specifically
+        const audienceInsights = allChunks.filter(c => c.category === 'audience_insight');
+        const emotionalTriggers = allChunks.filter(c => c.category === 'emotional_trigger');
+        const strategicQuestions = allChunks.filter(c => c.category === 'strategic_question');
+        const needIdentifications = allChunks.filter(c => c.category === 'need_identification');
+        const conversationPatterns = allChunks.filter(c => c.category === 'conversation_pattern');
+
+        return {
+          totalInsights: allChunks.length,
+          fromConversations: learnedFromConversations.length,
+          fromContent: learnedFromContent.length,
+          categoryCounts,
+          audienceInsights: audienceInsights.slice(-10).map(c => ({ content: c.content, createdAt: c.createdAt })),
+          emotionalTriggers: emotionalTriggers.slice(-10).map(c => ({ content: c.content, createdAt: c.createdAt })),
+          strategicQuestions: strategicQuestions.slice(-10).map(c => ({ content: c.content, createdAt: c.createdAt })),
+          needIdentifications: needIdentifications.slice(-10).map(c => ({ content: c.content, createdAt: c.createdAt })),
+          conversationPatterns: conversationPatterns.slice(-10).map(c => ({ content: c.content, createdAt: c.createdAt })),
+        };
+      }),
+
+    // Get conversation stage distribution
+    getStageDistribution: protectedProcedure
+      .input(z.object({ workspaceId: z.number().optional() }))
+      .query(async ({ ctx, input }) => {
+        const workspaceId = input.workspaceId || (await db.getActiveWorkspace(ctx.user.id))?.id;
+        if (!workspaceId) return [];
+        return db.getStageDistribution(workspaceId, ctx.user.id);
       }),
   }),
 });

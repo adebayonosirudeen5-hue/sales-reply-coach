@@ -742,3 +742,43 @@ export async function getBrainStats(userId: number) {
     level: stats.intelligenceLevel,
   };
 }
+
+
+// ============ ANALYTICS HELPERS ============
+
+export async function getAllKnowledgeChunks(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  return db.select().from(knowledgeChunks)
+    .where(eq(knowledgeChunks.userId, userId))
+    .orderBy(desc(knowledgeChunks.createdAt));
+}
+
+export async function getStageDistribution(workspaceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  const allProspects = await db.select().from(prospects)
+    .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.userId, userId)));
+  
+  const stageCounts: Record<string, { total: number; won: number; lost: number; active: number }> = {};
+  
+  for (const p of allProspects) {
+    const stage = p.conversationStage || "first_contact";
+    if (!stageCounts[stage]) {
+      stageCounts[stage] = { total: 0, won: 0, lost: 0, active: 0 };
+    }
+    stageCounts[stage].total++;
+    if (p.outcome === "won") stageCounts[stage].won++;
+    else if (p.outcome === "lost") stageCounts[stage].lost++;
+    else stageCounts[stage].active++;
+  }
+  
+  return Object.entries(stageCounts).map(([stage, counts]) => ({
+    stage,
+    ...counts,
+    winRate: counts.total > 0 ? Math.round((counts.won / counts.total) * 100) : 0,
+  }));
+}
+

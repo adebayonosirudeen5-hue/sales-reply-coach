@@ -41,9 +41,14 @@ export default function Home() {
             <MessageSquareText className="h-6 w-6 text-primary" />
             <span className="font-semibold text-lg">Sales Reply Coach</span>
           </div>
-          <Button onClick={() => window.location.href = getLoginUrl()}>
-            Sign In
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => setLocation("/login")}>
+              Sign In
+            </Button>
+            <Button onClick={() => setLocation("/signup")}>
+              Sign Up
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -66,7 +71,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button 
                 size="lg" 
-                onClick={() => window.location.href = getLoginUrl()}
+                onClick={() => setLocation("/signup")}
                 className="gap-2"
               >
                 Get Started Free
