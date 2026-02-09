@@ -10,11 +10,7 @@ import * as db from "./db";
 import jwt from "jsonwebtoken";
 import { ENV } from "./_core/env";
 import { callDataApi } from "./_core/dataApi";
-import { transcribeAudio } from "./_core/voiceTranscription";
-import { exec } from "child_process";
-import { promisify } from "util";
 
-const execAsync = promisify(exec);
 
 // ============ CONTINUOUS LEARNING ENGINE ============
 // Runs after every conversation exchange to learn from ALL interactions
@@ -196,171 +192,154 @@ EXPERT MODE QUESTIONS (professional authority):
 `;
 
 // ============ VIDEO TRANSCRIPTION ENGINE ============
-// Uses yt-dlp to extract audio URLs and Whisper API to transcribe video content
-// This allows the AI to "watch" videos by transcribing everything said in them
+// Uses YouTube InnerTube API to fetch captions/transcripts directly
+// This allows the AI to "watch" videos by reading everything said in them
 
-// Extract audio URL from a video URL using yt-dlp
-async function extractAudioUrl(videoUrl: string): Promise<{ audioUrl: string; title: string; duration: number } | null> {
+// Fetch YouTube transcript using InnerTube API (works in production, no yt-dlp needed)
+async function fetchYouTubeTranscript(videoId: string): Promise<{ transcript: string; title: string } | null> {
   try {
-    console.log(`[KB] Extracting audio URL from: ${videoUrl}`);
-    // Use yt-dlp to get the direct audio stream URL without downloading
-    const { stdout, stderr } = await execAsync(
-      `yt-dlp --no-download --print "%(title)s|||%(duration)s|||%(url)s" -f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio" --no-playlist "${videoUrl.replace(/"/g, '\\"')}"`,
-      { timeout: 60000 }
-    );
+    console.log(`[KB] Fetching transcript for YouTube video: ${videoId}`);
     
-    if (stderr) {
-      console.log(`[KB] yt-dlp stderr: ${stderr.substring(0, 200)}`);
+    // Step 1: Fetch YouTube page to get INNERTUBE_API_KEY
+    const pageHtml = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      signal: AbortSignal.timeout(15000),
+    }).then(res => res.text());
+    
+    const apiKeyMatch = pageHtml.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+    if (!apiKeyMatch) {
+      console.error("[KB] Could not find INNERTUBE_API_KEY");
+      return null;
     }
+    const apiKey = apiKeyMatch[1];
     
-    const output = stdout.trim();
-    if (!output) {
-      console.error("[KB] yt-dlp returned empty output");
+    // Extract title from page
+    const titleMatch = pageHtml.match(/<title>([^<]*)<\/title>/);
+    const pageTitle = titleMatch ? titleMatch[1].replace(" - YouTube", "").trim() : "Unknown";
+    
+    // Step 2: Call InnerTube player API with ANDROID client to get caption tracks
+    const playerResponse = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "ANDROID",
+            clientVersion: "20.10.38",
+          }
+        },
+        videoId
+      }),
+      signal: AbortSignal.timeout(15000),
+    }).then(res => res.json());
+    
+    // Step 3: Extract caption track URL
+    const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!tracks || tracks.length === 0) {
+      console.log("[KB] No caption tracks found for this video");
       return null;
     }
     
-    const parts = output.split("|||");
-    if (parts.length < 3) {
-      console.error("[KB] yt-dlp output format unexpected:", output.substring(0, 200));
+    console.log(`[KB] Found ${tracks.length} caption tracks: ${tracks.map((t: any) => `${t.languageCode} (${t.kind || 'manual'})`).join(", ")}`);
+    
+    // Prefer manual captions over auto-generated, prefer English
+    let track = tracks.find((t: any) => t.languageCode === "en" && t.kind !== "asr");
+    if (!track) track = tracks.find((t: any) => t.languageCode === "en");
+    if (!track) track = tracks[0]; // Fallback to first available
+    
+    // Step 4: Fetch caption XML
+    const captionUrl = track.baseUrl.replace(/&fmt=\w+$/, "");
+    const captionXml = await fetch(captionUrl, {
+      signal: AbortSignal.timeout(15000),
+    }).then(res => res.text());
+    
+    if (!captionXml || captionXml.length === 0) {
+      console.error("[KB] Empty caption response");
       return null;
     }
     
-    const title = parts[0] || "Unknown";
-    const duration = parseFloat(parts[1]) || 0;
-    const audioUrl = parts[2] || "";
-    
-    if (!audioUrl.startsWith("http")) {
-      console.error("[KB] Invalid audio URL from yt-dlp");
-      return null;
+    // Step 5: Parse XML to extract text
+    const texts: string[] = [];
+    const regex = /<text[^>]*>([\s\S]*?)<\/text>/g;
+    let m;
+    while ((m = regex.exec(captionXml)) !== null) {
+      texts.push(m[1]
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/\n/g, ' ')
+      );
     }
     
-    console.log(`[KB] Got audio URL for "${title}" (${Math.round(duration)}s)`);
-    return { audioUrl, title, duration };
+    const fullText = texts.join(' ').replace(/\s+/g, ' ').trim();
+    console.log(`[KB] Transcript extracted: ${fullText.length} chars for "${pageTitle}"`);
+    
+    return { transcript: fullText, title: pageTitle };
   } catch (error) {
-    console.error("[KB] yt-dlp extraction failed:", error instanceof Error ? error.message : error);
+    console.error("[KB] YouTube transcript fetch failed:", error instanceof Error ? error.message : error);
     return null;
   }
 }
 
-// Transcribe video audio using Whisper API
-async function transcribeVideoContent(audioUrl: string, title: string): Promise<string> {
+// Fetch Instagram video content - try to get the page content and use LLM vision
+async function fetchInstagramContent(url: string): Promise<string> {
   try {
-    console.log(`[KB] Transcribing audio for: ${title}`);
+    console.log(`[KB] Fetching Instagram content: ${url}`);
     
-    const result = await transcribeAudio({
-      audioUrl,
-      language: "en",
-      prompt: `Transcribe this video about sales, marketing, or business. The video is titled: "${title}". Capture everything said accurately.`,
+    // Try to fetch the Instagram page with oEmbed API first
+    const oembedUrl = `https://api.instagram.com/oembed?url=${encodeURIComponent(url)}&omitscript=true`;
+    try {
+      const oembedResponse = await fetch(oembedUrl, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (oembedResponse.ok) {
+        const oembed = await oembedResponse.json();
+        let content = "";
+        if (oembed.title) content += `POST CAPTION: ${oembed.title}\n`;
+        if (oembed.author_name) content += `AUTHOR: ${oembed.author_name}\n`;
+        if (oembed.thumbnail_url) {
+          content += `\nTHUMBNAIL AVAILABLE: ${oembed.thumbnail_url}\n`;
+        }
+        if (content) {
+          console.log(`[KB] Got Instagram oEmbed data: ${content.length} chars`);
+          return content;
+        }
+      }
+    } catch (e) {
+      console.log("[KB] Instagram oEmbed failed, trying direct fetch");
+    }
+    
+    // Fallback: try direct page fetch
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+      signal: AbortSignal.timeout(10000),
     });
     
-    // Check if it's an error response
-    if ("error" in result) {
-      console.error(`[KB] Transcription error: ${result.error} - ${result.details || ""}`);
-      
-      // If file too large, try to download and split
-      if (result.code === "FILE_TOO_LARGE") {
-        console.log("[KB] Audio file too large for direct transcription, attempting download and split...");
-        return await transcribeLargeVideo(audioUrl, title);
-      }
-      
-      return "";
-    }
+    if (!response.ok) return "";
+    const html = await response.text();
     
-    console.log(`[KB] Transcription complete: ${result.text.length} chars, language: ${result.language}`);
-    return result.text;
+    // Extract meta tags for content
+    let content = "";
+    const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i);
+    const ogDesc = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]*)"/i);
+    const ogVideo = html.match(/<meta[^>]*property="og:video"[^>]*content="([^"]*)"/i);
+    const ogImage = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i);
+    
+    if (ogTitle) content += `TITLE: ${ogTitle[1]}\n`;
+    if (ogDesc) content += `DESCRIPTION: ${ogDesc[1]}\n`;
+    if (ogVideo) content += `VIDEO URL: ${ogVideo[1]}\n`;
+    if (ogImage) content += `IMAGE: ${ogImage[1]}\n`;
+    
+    return content;
   } catch (error) {
-    console.error("[KB] Transcription failed:", error);
-    return "";
-  }
-}
-
-// Handle large videos by downloading audio, splitting into chunks, and transcribing each
-async function transcribeLargeVideo(audioUrl: string, title: string): Promise<string> {
-  try {
-    const tmpDir = `/tmp/kb-audio-${Date.now()}`;
-    await execAsync(`mkdir -p ${tmpDir}`);
-    
-    // Download audio to temp file
-    console.log("[KB] Downloading audio for splitting...");
-    await execAsync(
-      `curl -L -o ${tmpDir}/audio.m4a "${audioUrl.replace(/"/g, '\\"')}"`,
-      { timeout: 120000 }
-    );
-    
-    // Check file size
-    const { stdout: sizeOut } = await execAsync(`stat -c%s ${tmpDir}/audio.m4a`);
-    const fileSizeMB = parseInt(sizeOut.trim()) / (1024 * 1024);
-    console.log(`[KB] Downloaded audio: ${fileSizeMB.toFixed(1)}MB`);
-    
-    // Split into 14MB chunks (under 16MB limit)
-    const chunkDuration = Math.floor(14 / fileSizeMB * 100) * 10; // rough estimate of seconds per chunk
-    const segmentTime = Math.max(300, Math.min(chunkDuration, 900)); // 5-15 min chunks
-    
-    // Check if ffmpeg is available, if not install it
-    try {
-      await execAsync("which ffmpeg");
-    } catch {
-      console.log("[KB] Installing ffmpeg...");
-      await execAsync("sudo apt-get install -y ffmpeg 2>/dev/null || true", { timeout: 60000 });
-    }
-    
-    await execAsync(
-      `ffmpeg -i ${tmpDir}/audio.m4a -f segment -segment_time ${segmentTime} -c copy ${tmpDir}/chunk_%03d.m4a 2>/dev/null || true`,
-      { timeout: 120000 }
-    );
-    
-    // Get list of chunks
-    const { stdout: chunkList } = await execAsync(`ls ${tmpDir}/chunk_*.m4a 2>/dev/null || echo ""`);
-    const chunks = chunkList.trim().split("\n").filter(Boolean);
-    
-    if (chunks.length === 0) {
-      // Fallback: try to transcribe the first part only
-      console.log("[KB] Splitting failed, trying first 14MB only");
-      await execAsync(`head -c 14680064 ${tmpDir}/audio.m4a > ${tmpDir}/first_part.m4a`);
-      const { url: partUrl } = await storagePut(
-        `kb-audio/${nanoid()}-part.m4a`,
-        Buffer.from(await (await fetch(`file://${tmpDir}/first_part.m4a`)).arrayBuffer()),
-        "audio/mp4"
-      );
-      const partTranscript = await transcribeVideoContent(partUrl, title);
-      await execAsync(`rm -rf ${tmpDir}`);
-      return partTranscript;
-    }
-    
-    console.log(`[KB] Split into ${chunks.length} chunks, transcribing each...`);
-    
-    let fullTranscript = "";
-    for (let i = 0; i < chunks.length && i < 10; i++) { // Max 10 chunks
-      const chunkPath = chunks[i];
-      const chunkBuffer = await (await import("fs")).promises.readFile(chunkPath);
-      
-      // Upload chunk to S3 for transcription
-      const { url: chunkUrl } = await storagePut(
-        `kb-audio/${nanoid()}-chunk${i}.m4a`,
-        chunkBuffer,
-        "audio/mp4"
-      );
-      
-      const chunkResult = await transcribeAudio({
-        audioUrl: chunkUrl,
-        language: "en",
-        prompt: `Continue transcribing this video about sales/business. Title: "${title}". Part ${i + 1} of ${chunks.length}.`,
-      });
-      
-      if (!("error" in chunkResult)) {
-        fullTranscript += chunkResult.text + " ";
-        console.log(`[KB] Chunk ${i + 1}/${chunks.length} transcribed: ${chunkResult.text.length} chars`);
-      } else {
-        console.error(`[KB] Chunk ${i + 1} failed: ${chunkResult.error}`);
-      }
-    }
-    
-    // Cleanup
-    await execAsync(`rm -rf ${tmpDir}`);
-    
-    return fullTranscript.trim();
-  } catch (error) {
-    console.error("[KB] Large video transcription failed:", error);
+    console.error("[KB] Instagram content fetch failed:", error);
     return "";
   }
 }
@@ -369,9 +348,14 @@ async function transcribeLargeVideo(audioUrl: string, title: string): Promise<st
 // Fetch actual content from URLs - prioritizes video transcription over metadata
 async function fetchUrlContent(url: string, platform: string): Promise<string> {
   try {
-    // For video platforms, try to transcribe the actual video content
-    if (platform === "youtube" || platform === "instagram" || platform === "tiktok") {
-      return await fetchVideoContent(url, platform);
+    if (platform === "youtube") {
+      return await fetchYouTubeVideoContent(url);
+    }
+    if (platform === "instagram") {
+      return await fetchInstagramVideoContent(url);
+    }
+    if (platform === "tiktok") {
+      return await fetchTikTokContent(url);
     }
     // For other platforms, try to fetch the page content directly
     return await fetchWebPageContent(url);
@@ -381,46 +365,62 @@ async function fetchUrlContent(url: string, platform: string): Promise<string> {
   }
 }
 
-// Fetch and transcribe video content from any video platform
-async function fetchVideoContent(url: string, platform: string): Promise<string> {
-  let content = "";
+// Fetch YouTube video content - uses InnerTube API for full transcript
+async function fetchYouTubeVideoContent(url: string): Promise<string> {
+  const videoId = extractYouTubeVideoId(url);
+  if (!videoId) {
+    console.error("[KB] Could not extract YouTube video ID from URL:", url);
+    return "";
+  }
   
-  // Step 1: Try to extract audio and transcribe the video
-  console.log(`[KB] Attempting to transcribe ${platform} video: ${url}`);
-  const audioInfo = await extractAudioUrl(url);
+  // Try to get the full transcript
+  const result = await fetchYouTubeTranscript(videoId);
   
-  if (audioInfo) {
-    const { audioUrl, title, duration } = audioInfo;
-    content += `VIDEO TITLE: ${title}\n`;
-    content += `DURATION: ${Math.round(duration / 60)} minutes\n\n`;
-    
-    // Transcribe the video audio
-    const transcript = await transcribeVideoContent(audioUrl, title);
-    
-    if (transcript && transcript.length > 50) {
-      content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
-      content += transcript;
-      content += `\n\n=== END OF TRANSCRIPTION ===\n`;
-      console.log(`[KB] Successfully transcribed ${platform} video: ${transcript.length} chars`);
+  if (result && result.transcript && result.transcript.length > 100) {
+    let content = `VIDEO TITLE: ${result.title}\n`;
+    content += `PLATFORM: YouTube\n\n`;
+    content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
+    content += result.transcript;
+    content += `\n\n=== END OF TRANSCRIPTION ===\n`;
+    console.log(`[KB] Successfully got YouTube transcript: ${result.transcript.length} chars`);
+    return content;
+  }
+  
+  // Fallback to metadata
+  console.log("[KB] No transcript available, falling back to YouTube metadata");
+  const metadata = await fetchYouTubeMetadata(url);
+  if (metadata) {
+    return `NOTE: This video does not have captions/subtitles available. Below is metadata only:\n\n${metadata}`;
+  }
+  return "";
+}
+
+// Fetch Instagram video/post content
+async function fetchInstagramVideoContent(url: string): Promise<string> {
+  const content = await fetchInstagramContent(url);
+  if (content && content.length > 20) {
+    return `PLATFORM: Instagram\n${content}`;
+  }
+  return "NOTE: Could not fetch Instagram content. Instagram restricts automated access to their content. Please copy the video caption/text manually and paste it as a text knowledge item instead.";
+}
+
+// Fetch TikTok content
+async function fetchTikTokContent(url: string): Promise<string> {
+  try {
+    // Try oEmbed API for TikTok
+    const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
+    const response = await fetch(oembedUrl, { signal: AbortSignal.timeout(10000) });
+    if (response.ok) {
+      const data = await response.json();
+      let content = "PLATFORM: TikTok\n";
+      if (data.title) content += `CAPTION: ${data.title}\n`;
+      if (data.author_name) content += `AUTHOR: ${data.author_name}\n`;
       return content;
-    } else {
-      console.log(`[KB] Transcription was too short or empty, falling back to metadata`);
     }
-  } else {
-    console.log(`[KB] Could not extract audio from ${platform} video, falling back to metadata`);
+  } catch (e) {
+    console.error("[KB] TikTok oEmbed failed:", e);
   }
-  
-  // Step 2: Fallback - get metadata if transcription failed
-  if (platform === "youtube") {
-    content += await fetchYouTubeMetadata(url);
-  }
-  
-  // Add note about fallback
-  if (content) {
-    content = `NOTE: Could not transcribe the video audio. Below is metadata only:\n\n` + content;
-  }
-  
-  return content;
+  return "NOTE: Could not fetch TikTok content. TikTok restricts automated access. Please copy the video caption/text manually and paste it as a text knowledge item instead.";
 }
 
 // Extract YouTube video ID from URL

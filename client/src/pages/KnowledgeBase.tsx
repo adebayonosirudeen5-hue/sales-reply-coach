@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,13 @@ import {
   Briefcase,
   Globe,
   Youtube,
-  Instagram
+  Instagram,
+  Target,
+  Handshake,
+  Zap,
+  Shield,
+  BookOpen,
+  Video
 } from "lucide-react";
 
 export default function KnowledgeBase() {
@@ -39,10 +45,21 @@ export default function KnowledgeBase() {
   const [pdfTitle, setPdfTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+  const [hasProcessingItems, setHasProcessingItems] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const utils = trpc.useUtils();
-  const { data: items, isLoading } = trpc.knowledgeBase.list.useQuery({});
+  const { data: items, isLoading } = trpc.knowledgeBase.list.useQuery({}, {
+    // Auto-poll every 3 seconds when any item is processing
+    refetchInterval: hasProcessingItems ? 3000 : false,
+  });
+
+  // Track processing items for auto-polling
+  useEffect(() => {
+    if (items) {
+      setHasProcessingItems(items.some(item => item.status === "processing"));
+    }
+  }, [items]);
 
   const addUrl = trpc.knowledgeBase.addUrl.useMutation({
     onSuccess: (data) => {
@@ -447,37 +464,100 @@ export default function KnowledgeBase() {
                         </p>
                       </div>
 
-                      {/* Objections Handled */}
-                      {item.objectionFrameworks && (
+                      {/* All Knowledge Categories */}
+                      {item.salesPsychology && item.salesPsychology !== "Not extracted" && (
                         <div className="space-y-1">
                           <p className="text-xs font-medium flex items-center gap-1">
-                            <MessageCircle className="h-3 w-3 text-orange-500" />
-                            Objections this helps handle:
+                            <Brain className="h-3 w-3 text-indigo-500" />
+                            Sales Psychology:
                           </p>
-                          <div className="flex flex-wrap gap-1">
-                            {item.objectionFrameworks?.split(",").map((obj: string, i: number) => (
-                              <Badge key={i} variant="outline" className="text-xs bg-orange-50 text-orange-700 border-orange-200">
-                                {obj.trim()}
-                              </Badge>
-                            ))}
-                          </div>
+                          <p className="text-xs text-muted-foreground bg-indigo-50 dark:bg-indigo-950/30 rounded p-2 leading-relaxed">
+                            {item.salesPsychology}
+                          </p>
                         </div>
                       )}
 
-                      {/* Language Styles */}
-                      {item.languagePatterns && (
+                      {item.rapportTechniques && item.rapportTechniques !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Handshake className="h-3 w-3 text-green-500" />
+                            Rapport Building:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-green-50 dark:bg-green-950/30 rounded p-2 leading-relaxed">
+                            {item.rapportTechniques}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.conversationStarters && item.conversationStarters !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <MessageCircle className="h-3 w-3 text-blue-500" />
+                            Conversation Starters:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950/30 rounded p-2 leading-relaxed">
+                            {item.conversationStarters}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.objectionFrameworks && item.objectionFrameworks !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Shield className="h-3 w-3 text-orange-500" />
+                            Objection Handling:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-orange-50 dark:bg-orange-950/30 rounded p-2 leading-relaxed">
+                            {item.objectionFrameworks}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.closingTechniques && item.closingTechniques !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Target className="h-3 w-3 text-red-500" />
+                            Closing Techniques:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-red-50 dark:bg-red-950/30 rounded p-2 leading-relaxed">
+                            {item.closingTechniques}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.languagePatterns && item.languagePatterns !== "Not extracted" && (
                         <div className="space-y-1">
                           <p className="text-xs font-medium flex items-center gap-1">
                             <Sparkles className="h-3 w-3 text-purple-500" />
-                            Language patterns detected:
+                            Language Patterns:
                           </p>
-                          <div className="flex flex-wrap gap-1">
-                            {item.languagePatterns?.split(",").map((style: string, i: number) => (
-                              <Badge key={i} variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-200">
-                                {style.trim()}
-                              </Badge>
-                            ))}
-                          </div>
+                          <p className="text-xs text-muted-foreground bg-purple-50 dark:bg-purple-950/30 rounded p-2 leading-relaxed">
+                            {item.languagePatterns}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.emotionalTriggers && item.emotionalTriggers !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Zap className="h-3 w-3 text-yellow-500" />
+                            Emotional Triggers:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-yellow-50 dark:bg-yellow-950/30 rounded p-2 leading-relaxed">
+                            {item.emotionalTriggers}
+                          </p>
+                        </div>
+                      )}
+
+                      {item.trustStrategies && item.trustStrategies !== "Not extracted" && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium flex items-center gap-1">
+                            <Heart className="h-3 w-3 text-pink-500" />
+                            Trust Building:
+                          </p>
+                          <p className="text-xs text-muted-foreground bg-pink-50 dark:bg-pink-950/30 rounded p-2 leading-relaxed">
+                            {item.trustStrategies}
+                          </p>
                         </div>
                       )}
 
@@ -531,7 +611,17 @@ export default function KnowledgeBase() {
                 {item.status === "processing" && (
                   <div className="mb-3">
                     <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                      <span>Processing...</span>
+                      <span className="flex items-center gap-1">
+                        {(item.processingProgress || 0) < 30 ? (
+                          <><Video className="h-3 w-3 animate-pulse" /> {item.platform === "youtube" || item.platform === "instagram" || item.platform === "tiktok" ? "Transcribing video..." : "Extracting content..."}</>
+                        ) : (item.processingProgress || 0) < 50 ? (
+                          <><BookOpen className="h-3 w-3 animate-pulse" /> Analyzing content...</>
+                        ) : (item.processingProgress || 0) < 75 ? (
+                          <><Brain className="h-3 w-3 animate-pulse" /> Extracting knowledge...</>
+                        ) : (
+                          <><Sparkles className="h-3 w-3 animate-pulse" /> Building knowledge chunks...</>
+                        )}
+                      </span>
                       <span>{item.processingProgress || 0}%</span>
                     </div>
                     <div className="h-1.5 bg-muted rounded-full overflow-hidden">

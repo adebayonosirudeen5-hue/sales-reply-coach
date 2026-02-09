@@ -288,3 +288,13 @@
 - [x] Remove reliance on just title/description metadata
 - [x] Handle large videos by splitting audio into chunks for transcription
 - [x] Fallback to metadata when transcription is unavailable
+
+## Critical Fixes (v14)
+- [x] Fix: YouTube video transcription - replaced yt-dlp with InnerTube API for production-ready transcript extraction (full captions/subtitles)
+- [x] Fix: Instagram URL content extraction - implemented oEmbed API + direct page scraping with og:meta extraction
+- [x] Fix: Knowledge base now shows ALL 9 learned categories (Sales Psychology, Rapport Building, Conversation Starters, Objection Handling, Closing Techniques, Language Patterns, Emotional Triggers, Trust Building + Summary)
+- [x] Verified: Signup verification flow v9.1 is already complete - code input step works correctly
+- [x] Add: Processing status indicator showing "Transcribing video...", "Analyzing content...", "Extracting knowledge...", "Building knowledge chunks..." based on progress
+- [x] Fix: Knowledge base shows what AI actually learned from full video transcript, not just inferred from title
+- [x] Add: Auto-polling every 3 seconds when items are processing for real-time progress updates
+- [x] Add: TikTok content extraction via oEmbed API
