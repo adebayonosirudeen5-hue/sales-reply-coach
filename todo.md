@@ -298,3 +298,12 @@
 - [x] Fix: Knowledge base shows what AI actually learned from full video transcript, not just inferred from title
 - [x] Add: Auto-polling every 3 seconds when items are processing for real-time progress updates
 - [x] Add: TikTok content extraction via oEmbed API
+
+## Critical Fixes (v15) - Video Transcription & PDF Processing
+- [x] Fix: YouTube transcript extraction - replaced InnerTube API with yt-dlp captions + OpenAI Whisper fallback (27,403 chars from test video)
+- [x] Fix: Instagram content extraction - implemented yt-dlp audio download + Whisper transcription with oEmbed fallback
+- [x] Fix: PDF processing - added OpenAI GPT-4o-mini as fallback LLM when built-in LLM returns 500 errors
+- [x] Add: OpenAI API key integration for Whisper transcription and fallback LLM
+- [x] Add: yt-dlp availability check with graceful degradation for production environments
+- [x] Add: postinstall script to install yt-dlp in production
+- [x] All 105 tests passing including real YouTube transcription test

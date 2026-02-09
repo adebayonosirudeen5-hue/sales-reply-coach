@@ -10,7 +10,8 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate"
+    "db:push": "drizzle-kit generate && drizzle-kit migrate",
+    "postinstall": "which yt-dlp || (pip install yt-dlp 2>/dev/null || pip3 install yt-dlp 2>/dev/null || true) && which ffmpeg || true"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",

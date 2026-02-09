@@ -192,171 +192,67 @@ EXPERT MODE QUESTIONS (professional authority):
 `;
 
 // ============ VIDEO TRANSCRIPTION ENGINE ============
-// Uses YouTube InnerTube API to fetch captions/transcripts directly
-// This allows the AI to "watch" videos by reading everything said in them
+// Uses yt-dlp + OpenAI Whisper for actual video transcription
+import { getYouTubeTranscript, getInstagramTranscript, getTikTokTranscript, callOpenAIFallback } from "./videoTranscription";
 
-// Fetch YouTube transcript using InnerTube API (works in production, no yt-dlp needed)
-async function fetchYouTubeTranscript(videoId: string): Promise<{ transcript: string; title: string } | null> {
-  try {
-    console.log(`[KB] Fetching transcript for YouTube video: ${videoId}`);
-    
-    // Step 1: Fetch YouTube page to get INNERTUBE_API_KEY
-    const pageHtml = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      signal: AbortSignal.timeout(15000),
-    }).then(res => res.text());
-    
-    const apiKeyMatch = pageHtml.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
-    if (!apiKeyMatch) {
-      console.error("[KB] Could not find INNERTUBE_API_KEY");
-      return null;
-    }
-    const apiKey = apiKeyMatch[1];
-    
-    // Extract title from page
-    const titleMatch = pageHtml.match(/<title>([^<]*)<\/title>/);
-    const pageTitle = titleMatch ? titleMatch[1].replace(" - YouTube", "").trim() : "Unknown";
-    
-    // Step 2: Call InnerTube player API with ANDROID client to get caption tracks
-    const playerResponse = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: "ANDROID",
-            clientVersion: "20.10.38",
-          }
-        },
-        videoId
-      }),
-      signal: AbortSignal.timeout(15000),
-    }).then(res => res.json());
-    
-    // Step 3: Extract caption track URL
-    const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (!tracks || tracks.length === 0) {
-      console.log("[KB] No caption tracks found for this video");
-      return null;
-    }
-    
-    console.log(`[KB] Found ${tracks.length} caption tracks: ${tracks.map((t: any) => `${t.languageCode} (${t.kind || 'manual'})`).join(", ")}`);
-    
-    // Prefer manual captions over auto-generated, prefer English
-    let track = tracks.find((t: any) => t.languageCode === "en" && t.kind !== "asr");
-    if (!track) track = tracks.find((t: any) => t.languageCode === "en");
-    if (!track) track = tracks[0]; // Fallback to first available
-    
-    // Step 4: Fetch caption XML
-    const captionUrl = track.baseUrl.replace(/&fmt=\w+$/, "");
-    const captionXml = await fetch(captionUrl, {
-      signal: AbortSignal.timeout(15000),
-    }).then(res => res.text());
-    
-    if (!captionXml || captionXml.length === 0) {
-      console.error("[KB] Empty caption response");
-      return null;
-    }
-    
-    // Step 5: Parse XML to extract text
-    const texts: string[] = [];
-    const regex = /<text[^>]*>([\s\S]*?)<\/text>/g;
-    let m;
-    while ((m = regex.exec(captionXml)) !== null) {
-      texts.push(m[1]
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&#39;/g, "'")
-        .replace(/&quot;/g, '"')
-        .replace(/\n/g, ' ')
-      );
-    }
-    
-    const fullText = texts.join(' ').replace(/\s+/g, ' ').trim();
-    console.log(`[KB] Transcript extracted: ${fullText.length} chars for "${pageTitle}"`);
-    
-    return { transcript: fullText, title: pageTitle };
-  } catch (error) {
-    console.error("[KB] YouTube transcript fetch failed:", error instanceof Error ? error.message : error);
-    return null;
-  }
-}
+// ============ URL CONTENT FETCHING (uses videoTranscription module) ============
 
-// Fetch Instagram video content - try to get the page content and use LLM vision
-async function fetchInstagramContent(url: string): Promise<string> {
-  try {
-    console.log(`[KB] Fetching Instagram content: ${url}`);
-    
-    // Try to fetch the Instagram page with oEmbed API first
-    const oembedUrl = `https://api.instagram.com/oembed?url=${encodeURIComponent(url)}&omitscript=true`;
-    try {
-      const oembedResponse = await fetch(oembedUrl, {
-        signal: AbortSignal.timeout(10000),
-      });
-      if (oembedResponse.ok) {
-        const oembed = await oembedResponse.json();
-        let content = "";
-        if (oembed.title) content += `POST CAPTION: ${oembed.title}\n`;
-        if (oembed.author_name) content += `AUTHOR: ${oembed.author_name}\n`;
-        if (oembed.thumbnail_url) {
-          content += `\nTHUMBNAIL AVAILABLE: ${oembed.thumbnail_url}\n`;
-        }
-        if (content) {
-          console.log(`[KB] Got Instagram oEmbed data: ${content.length} chars`);
-          return content;
-        }
-      }
-    } catch (e) {
-      console.log("[KB] Instagram oEmbed failed, trying direct fetch");
-    }
-    
-    // Fallback: try direct page fetch
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-    
-    if (!response.ok) return "";
-    const html = await response.text();
-    
-    // Extract meta tags for content
-    let content = "";
-    const ogTitle = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i);
-    const ogDesc = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]*)"/i);
-    const ogVideo = html.match(/<meta[^>]*property="og:video"[^>]*content="([^"]*)"/i);
-    const ogImage = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i);
-    
-    if (ogTitle) content += `TITLE: ${ogTitle[1]}\n`;
-    if (ogDesc) content += `DESCRIPTION: ${ogDesc[1]}\n`;
-    if (ogVideo) content += `VIDEO URL: ${ogVideo[1]}\n`;
-    if (ogImage) content += `IMAGE: ${ogImage[1]}\n`;
-    
-    return content;
-  } catch (error) {
-    console.error("[KB] Instagram content fetch failed:", error);
-    return "";
-  }
-}
-
-// ============ URL CONTENT FETCHING ============
-// Fetch actual content from URLs - prioritizes video transcription over metadata
+// Main entry point for fetching content from any URL
 async function fetchUrlContent(url: string, platform: string): Promise<string> {
   try {
     if (platform === "youtube") {
-      return await fetchYouTubeVideoContent(url);
+      const result = await getYouTubeTranscript(url);
+      if (result.method !== "failed" && result.transcript.length > 100) {
+        let content = `VIDEO TITLE: ${result.title}\n`;
+        content += `PLATFORM: YouTube\n`;
+        content += `TRANSCRIPTION METHOD: ${result.method}\n\n`;
+        content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
+        content += result.transcript;
+        content += `\n\n=== END OF TRANSCRIPTION ===\n`;
+        console.log(`[KB] YouTube transcript: ${result.transcript.length} chars via ${result.method}`);
+        return content;
+      }
+      // Fallback to metadata
+      const metadata = await fetchYouTubeMetadata(url);
+      return metadata ? `NOTE: Could not transcribe this video. Below is metadata only:\n\n${metadata}` : "";
     }
+    
     if (platform === "instagram") {
-      return await fetchInstagramVideoContent(url);
+      const result = await getInstagramTranscript(url);
+      if (result.method !== "failed" && result.transcript.length > 50) {
+        let content = `VIDEO TITLE: ${result.title}\n`;
+        content += `PLATFORM: Instagram\n`;
+        content += `TRANSCRIPTION METHOD: ${result.method}\n\n`;
+        if (result.method === "whisper") {
+          content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
+          content += result.transcript;
+          content += `\n\n=== END OF TRANSCRIPTION ===\n`;
+        } else {
+          content += `CONTENT: ${result.transcript}\n`;
+        }
+        return content;
+      }
+      return "NOTE: Could not fetch Instagram content. Instagram restricts automated access. Please copy the video caption/text manually and paste it as a text knowledge item instead.";
     }
+    
     if (platform === "tiktok") {
-      return await fetchTikTokContent(url);
+      const result = await getTikTokTranscript(url);
+      if (result.method !== "failed" && result.transcript.length > 50) {
+        let content = `VIDEO TITLE: ${result.title}\n`;
+        content += `PLATFORM: TikTok\n`;
+        content += `TRANSCRIPTION METHOD: ${result.method}\n\n`;
+        if (result.method === "whisper") {
+          content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
+          content += result.transcript;
+          content += `\n\n=== END OF TRANSCRIPTION ===\n`;
+        } else {
+          content += `CONTENT: ${result.transcript}\n`;
+        }
+        return content;
+      }
+      return "NOTE: Could not fetch TikTok content. Please copy the video caption/text manually.";
     }
+    
     // For other platforms, try to fetch the page content directly
     return await fetchWebPageContent(url);
   } catch (error) {
@@ -365,63 +261,8 @@ async function fetchUrlContent(url: string, platform: string): Promise<string> {
   }
 }
 
-// Fetch YouTube video content - uses InnerTube API for full transcript
-async function fetchYouTubeVideoContent(url: string): Promise<string> {
-  const videoId = extractYouTubeVideoId(url);
-  if (!videoId) {
-    console.error("[KB] Could not extract YouTube video ID from URL:", url);
-    return "";
-  }
-  
-  // Try to get the full transcript
-  const result = await fetchYouTubeTranscript(videoId);
-  
-  if (result && result.transcript && result.transcript.length > 100) {
-    let content = `VIDEO TITLE: ${result.title}\n`;
-    content += `PLATFORM: YouTube\n\n`;
-    content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
-    content += result.transcript;
-    content += `\n\n=== END OF TRANSCRIPTION ===\n`;
-    console.log(`[KB] Successfully got YouTube transcript: ${result.transcript.length} chars`);
-    return content;
-  }
-  
-  // Fallback to metadata
-  console.log("[KB] No transcript available, falling back to YouTube metadata");
-  const metadata = await fetchYouTubeMetadata(url);
-  if (metadata) {
-    return `NOTE: This video does not have captions/subtitles available. Below is metadata only:\n\n${metadata}`;
-  }
-  return "";
-}
-
-// Fetch Instagram video/post content
-async function fetchInstagramVideoContent(url: string): Promise<string> {
-  const content = await fetchInstagramContent(url);
-  if (content && content.length > 20) {
-    return `PLATFORM: Instagram\n${content}`;
-  }
-  return "NOTE: Could not fetch Instagram content. Instagram restricts automated access to their content. Please copy the video caption/text manually and paste it as a text knowledge item instead.";
-}
-
-// Fetch TikTok content
-async function fetchTikTokContent(url: string): Promise<string> {
-  try {
-    // Try oEmbed API for TikTok
-    const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
-    const response = await fetch(oembedUrl, { signal: AbortSignal.timeout(10000) });
-    if (response.ok) {
-      const data = await response.json();
-      let content = "PLATFORM: TikTok\n";
-      if (data.title) content += `CAPTION: ${data.title}\n`;
-      if (data.author_name) content += `AUTHOR: ${data.author_name}\n`;
-      return content;
-    }
-  } catch (e) {
-    console.error("[KB] TikTok oEmbed failed:", e);
-  }
-  return "NOTE: Could not fetch TikTok content. TikTok restricts automated access. Please copy the video caption/text manually and paste it as a text knowledge item instead.";
-}
+// Helper functions kept for metadata fallback
+// (Video transcription is handled by videoTranscription.ts module)
 
 // Extract YouTube video ID from URL
 function extractYouTubeVideoId(url: string): string | null {
@@ -675,6 +516,24 @@ async function callLLMWithRetry(params: Parameters<typeof invokeLLM>[0], maxRetr
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
+  }
+  // Fallback to OpenAI GPT when built-in LLM fails
+  console.log("[LLM] Built-in LLM failed after retries, trying OpenAI GPT fallback...");
+  try {
+    const fallbackResult = await callOpenAIFallback({
+      messages: params.messages.map(m => ({
+        role: m.role as string,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+      response_format: params.response_format || params.responseFormat,
+      max_tokens: params.max_tokens || params.maxTokens,
+    });
+    if (fallbackResult?.choices?.length > 0) {
+      console.log("[LLM] OpenAI GPT fallback succeeded");
+      return fallbackResult;
+    }
+  } catch (fallbackError) {
+    console.error("[LLM] OpenAI GPT fallback also failed:", fallbackError instanceof Error ? fallbackError.message : fallbackError);
   }
   throw lastError || new Error("AI service failed after multiple retries. Please try again later.");
 }
