@@ -271,3 +271,9 @@
 - [x] Extract audience insights from post comments/engagement
 - [x] Generate comprehensive prospect profile with all data
 - [x] Create personalized first message based on deep analysis
+
+## Critical Bug Fixes (v12)
+- [x] Fix: Profile analysis shows "Profile analyzed" but no first message suggestion appears in UI - made suggestion always visible with gradient styling, copy & use buttons
+- [x] Fix: Chat messages query failing with database error - added missing threadType column to database
+- [x] Fix: Screenshot upload file input not resetting after upload
+- [x] Fix: Knowledge base not analyzing YouTube/Instagram video content properly - integrated YouTube Data API (search, channel details, channel videos) for actual content extraction, added web page scraping for other URLs

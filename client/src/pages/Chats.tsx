@@ -169,6 +169,10 @@ export default function Chats() {
       });
     };
     reader.readAsDataURL(file);
+    // Reset file input so the same file can be re-uploaded
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const handleSendMessage = () => {
@@ -542,23 +546,43 @@ export default function Chats() {
               </div>
             </div>
 
-            {/* Suggested First Message (if available and no messages yet) */}
-            {prospectData?.prospect.suggestedFirstMessage && prospectData.messages.length === 0 && (
-              <div className="p-4 bg-primary/5 border-b">
-                <div className="flex items-start gap-2">
-                  <Sparkles className="h-4 w-4 text-primary mt-1" />
+            {/* Suggested First Message (if available) */}
+            {prospectData?.prospect.suggestedFirstMessage && (
+              <div className="p-4 bg-gradient-to-r from-primary/10 to-primary/5 border-b">
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                  </div>
                   <div className="flex-1">
-                    <p className="text-sm font-medium mb-1">Suggested First Message</p>
-                    <p className="text-sm text-muted-foreground">{prospectData.prospect.suggestedFirstMessage}</p>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="mt-2"
-                      onClick={() => handleCopySuggestion(0, prospectData.prospect.suggestedFirstMessage!)}
-                    >
-                      <Copy className="h-3 w-3 mr-1" />
-                      Copy
-                    </Button>
+                    <p className="text-sm font-semibold mb-1 text-primary">AI Suggested First Message</p>
+                    <p className="text-sm bg-background/80 rounded-lg p-3 border">{prospectData.prospect.suggestedFirstMessage}</p>
+                    <div className="flex gap-2 mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCopySuggestion(0, prospectData.prospect.suggestedFirstMessage!)}
+                      >
+                        {copiedId === 0 ? <Check className="h-3 w-3 mr-1 text-green-500" /> : <Copy className="h-3 w-3 mr-1" />}
+                        {copiedId === 0 ? "Copied!" : "Copy"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (selectedProspectId) {
+                            sendOutbound.mutate({
+                              prospectId: selectedProspectId,
+                              content: prospectData.prospect.suggestedFirstMessage!,
+                              isAiSuggestion: true,
+                              threadType: currentThreadType,
+                            });
+                          }
+                        }}
+                        disabled={sendOutbound.isPending}
+                      >
+                        <Send className="h-3 w-3 mr-1" />
+                        Use This
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>

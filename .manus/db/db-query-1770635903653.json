@@ -1,0 +1,88 @@
+{
+  "query": "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'chat_messages' ORDER BY ORDINAL_POSITION;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3aUD1tK7DVesR3q.9cd46f6255b0 --database m9uKAAPN5b6jXSh8RAgBzz --execute SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'chat_messages' ORDER BY ORDINAL_POSITION;",
+  "rows": [
+    {
+      "COLUMN_NAME": "id",
+      "DATA_TYPE": "int",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "prospectId",
+      "DATA_TYPE": "int",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "userId",
+      "DATA_TYPE": "int",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "direction",
+      "DATA_TYPE": "enum",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "content",
+      "DATA_TYPE": "text",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "screenshotUrl",
+      "DATA_TYPE": "text",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "analysisContext",
+      "DATA_TYPE": "enum",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "detectedTone",
+      "DATA_TYPE": "varchar",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "reasoning",
+      "DATA_TYPE": "text",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "isAiSuggestion",
+      "DATA_TYPE": "tinyint",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "0"
+    },
+    {
+      "COLUMN_NAME": "suggestionType",
+      "DATA_TYPE": "enum",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "NULL"
+    },
+    {
+      "COLUMN_NAME": "wasSent",
+      "DATA_TYPE": "tinyint",
+      "IS_NULLABLE": "YES",
+      "COLUMN_DEFAULT": "0"
+    },
+    {
+      "COLUMN_NAME": "createdAt",
+      "DATA_TYPE": "timestamp",
+      "IS_NULLABLE": "NO",
+      "COLUMN_DEFAULT": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\tDATA_TYPE\tIS_NULLABLE\tCOLUMN_DEFAULT\nid\tint\tNO\tNULL\nprospectId\tint\tNO\tNULL\nuserId\tint\tNO\tNULL\ndirection\tenum\tNO\tNULL\ncontent\ttext\tNO\tNULL\nscreenshotUrl\ttext\tYES\tNULL\nanalysisContext\tenum\tYES\tNULL\ndetectedTone\tvarchar\tYES\tNULL\nreasoning\ttext\tYES\tNULL\nisAiSuggestion\ttinyint\tYES\t0\nsuggestionType\tenum\tYES\tNULL\nwasSent\ttinyint\tYES\t0\ncreatedAt\ttimestamp\tNO\tCURRENT_TIMESTAMP\n",
+  "stderr": "",
+  "execution_time_ms": 468
+}

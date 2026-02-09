@@ -9,6 +9,7 @@ import { nanoid } from "nanoid";
 import * as db from "./db";
 import jwt from "jsonwebtoken";
 import { ENV } from "./_core/env";
+import { callDataApi } from "./_core/dataApi";
 
 // ============ CONTINUOUS LEARNING ENGINE ============
 // Runs after every conversation exchange to learn from ALL interactions
@@ -188,6 +189,198 @@ EXPERT MODE QUESTIONS (professional authority):
 - "Most people in your situation find that [insight]... does that resonate?"
 - "If we could help you achieve [their stated goal], what would that be worth to you?"
 `;
+
+// ============ URL CONTENT FETCHING ============
+// Fetch actual content from URLs using Data APIs and web scraping
+async function fetchUrlContent(url: string, platform: string): Promise<string> {
+  try {
+    if (platform === "youtube") {
+      return await fetchYouTubeContent(url);
+    }
+    // For other platforms, try to fetch the page content directly
+    return await fetchWebPageContent(url);
+  } catch (error) {
+    console.error(`[KB] Error fetching content from ${platform}:`, error);
+    return "";
+  }
+}
+
+// Extract YouTube video ID from URL
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+    /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// Extract YouTube channel ID or handle from URL
+function extractYouTubeChannelId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/channel\/)([a-zA-Z0-9_-]+)/,
+    /(?:youtube\.com\/@)([a-zA-Z0-9_.-]+)/,
+    /(?:youtube\.com\/c\/)([a-zA-Z0-9_.-]+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+async function fetchYouTubeContent(url: string): Promise<string> {
+  let content = "";
+  
+  const videoId = extractYouTubeVideoId(url);
+  const channelId = extractYouTubeChannelId(url);
+  
+  if (videoId) {
+    // For individual videos, search for the video to get its details
+    try {
+      const searchResult = await callDataApi("Youtube/search", {
+        query: { q: videoId, hl: "en", gl: "US" },
+      }) as any;
+      
+      if (searchResult?.contents) {
+        for (const item of searchResult.contents) {
+          if (item?.type === "video" && item?.video) {
+            const video = item.video;
+            content += `VIDEO TITLE: ${video.title || "Unknown"}\n`;
+            content += `CHANNEL: ${video.channelTitle || "Unknown"}\n`;
+            content += `VIEWS: ${video.viewCountText || "Unknown"}\n`;
+            content += `PUBLISHED: ${video.publishedTimeText || "Unknown"}\n`;
+            content += `DESCRIPTION: ${video.descriptionSnippet || "No description"}\n\n`;
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[KB] YouTube search failed:", err);
+    }
+  }
+  
+  if (channelId || url.includes("youtube.com/@") || url.includes("youtube.com/c/")) {
+    // For channels, get channel details and recent videos
+    const channelQuery = channelId || url;
+    try {
+      const channelDetails = await callDataApi("Youtube/get_channel_details", {
+        query: { id: channelQuery, hl: "en" },
+      }) as any;
+      
+      if (channelDetails) {
+        content += `CHANNEL NAME: ${channelDetails.title || "Unknown"}\n`;
+        content += `CHANNEL DESCRIPTION: ${channelDetails.description || "No description"}\n`;
+        content += `SUBSCRIBERS: ${channelDetails.stats?.subscribersText || "Unknown"}\n`;
+        content += `TOTAL VIDEOS: ${channelDetails.stats?.videos || "Unknown"}\n`;
+        content += `COUNTRY: ${channelDetails.country || "Unknown"}\n`;
+        
+        if (channelDetails.keywords?.length) {
+          content += `KEYWORDS: ${channelDetails.keywords.join(", ")}\n`;
+        }
+        content += "\n";
+      }
+    } catch (err) {
+      console.error("[KB] YouTube channel details failed:", err);
+    }
+    
+    // Get recent videos from channel
+    try {
+      const actualChannelId = channelId?.startsWith("UC") ? channelId : channelQuery;
+      const channelVideos = await callDataApi("Youtube/get_channel_videos", {
+        query: { id: actualChannelId, filter: "videos_latest", hl: "en", gl: "US" },
+      }) as any;
+      
+      if (channelVideos?.contents) {
+        content += "RECENT VIDEOS:\n";
+        for (const item of channelVideos.contents.slice(0, 10)) {
+          if (item?.type === "video" && item?.video) {
+            const video = item.video;
+            content += `- ${video.title || "Untitled"} (${video.stats?.views || 0} views, ${video.publishedTimeText || ""})\n`;
+          }
+        }
+        content += "\n";
+      }
+    } catch (err) {
+      console.error("[KB] YouTube channel videos failed:", err);
+    }
+  }
+  
+  // If we got a video URL but no channel info, also try to get channel context
+  if (videoId && !channelId) {
+    try {
+      // Search for the video title to get more context
+      const searchResult = await callDataApi("Youtube/search", {
+        query: { q: url, hl: "en", gl: "US" },
+      }) as any;
+      
+      if (searchResult?.contents) {
+        content += "RELATED CONTENT:\n";
+        for (const item of searchResult.contents.slice(0, 5)) {
+          if (item?.type === "video" && item?.video) {
+            content += `- ${item.video.title || "Untitled"}: ${item.video.descriptionSnippet || ""}\n`;
+          }
+        }
+      }
+    } catch (err) {
+      // Non-critical, ignore
+    }
+  }
+  
+  return content;
+}
+
+async function fetchWebPageContent(url: string): Promise<string> {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; SalesCoachBot/1.0)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    
+    if (!response.ok) return "";
+    
+    const html = await response.text();
+    
+    // Basic HTML to text extraction
+    let text = html
+      // Remove scripts and styles
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      // Extract meta description
+      .replace(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/gi, "META DESCRIPTION: $1\n")
+      .replace(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["'][^>]*>/gi, "META DESCRIPTION: $1\n")
+      // Extract title
+      .replace(/<title[^>]*>([^<]*)<\/title>/gi, "PAGE TITLE: $1\n")
+      // Extract headings
+      .replace(/<h[1-6][^>]*>([^<]*)<\/h[1-6]>/gi, "\nHEADING: $1\n")
+      // Extract paragraphs
+      .replace(/<p[^>]*>/gi, "\n")
+      // Remove remaining HTML tags
+      .replace(/<[^>]+>/g, " ")
+      // Clean up whitespace
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/\s+/g, " ")
+      .trim();
+    
+    // Limit to first 10000 chars
+    return text.substring(0, 10000);
+  } catch (error) {
+    console.error("[KB] Web page fetch failed:", error);
+    return "";
+  }
+}
 
 // Helper to detect platform from URL
 function detectPlatform(url: string): string {
@@ -1476,11 +1669,21 @@ Return ONLY the refined message, ready to send.`;
           if (item.type === "url") {
             const platform = item.platform || detectPlatform(item.sourceUrl);
             
+            // Fetch actual content from the URL using Data APIs
+            let fetchedContent = "";
+            try {
+              fetchedContent = await fetchUrlContent(item.sourceUrl, platform);
+            } catch (fetchErr) {
+              console.error(`[KB] Failed to fetch content from ${platform}:`, fetchErr);
+            }
+
+            await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 25 });
+
             const extractResponse = await callLLMWithRetry({
               messages: [
                 { 
                   role: "system", 
-                  content: `You are a sales training content analyzer. Extract EVERYTHING from this ${platform} content that could help someone become better at sales conversations. Be thorough and detailed.` 
+                  content: `You are a sales training content analyzer. You have been given the actual content extracted from a ${platform} URL. Analyze it thoroughly and extract EVERYTHING that could help someone become better at sales conversations.` 
                 },
                 { 
                   role: "user", 
@@ -1488,7 +1691,7 @@ Return ONLY the refined message, ready to send.`;
 Title: ${item.title}
 URL: ${item.sourceUrl}
 
-Extract ALL learnings including:
+${fetchedContent ? `ACTUAL CONTENT EXTRACTED FROM THE URL:\n${fetchedContent.substring(0, 15000)}\n\n` : "NOTE: Could not fetch content from this URL directly. Analyze based on the title and URL context.\n\n"}Extract ALL learnings including:
 - Sales techniques and methodologies (step by step)
 - Specific phrases, scripts, and word choices to use
 - Objection handling approaches with examples
