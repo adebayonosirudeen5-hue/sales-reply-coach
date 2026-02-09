@@ -10,6 +10,11 @@ import * as db from "./db";
 import jwt from "jsonwebtoken";
 import { ENV } from "./_core/env";
 import { callDataApi } from "./_core/dataApi";
+import { transcribeAudio } from "./_core/voiceTranscription";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 // ============ CONTINUOUS LEARNING ENGINE ============
 // Runs after every conversation exchange to learn from ALL interactions
@@ -190,12 +195,183 @@ EXPERT MODE QUESTIONS (professional authority):
 - "If we could help you achieve [their stated goal], what would that be worth to you?"
 `;
 
+// ============ VIDEO TRANSCRIPTION ENGINE ============
+// Uses yt-dlp to extract audio URLs and Whisper API to transcribe video content
+// This allows the AI to "watch" videos by transcribing everything said in them
+
+// Extract audio URL from a video URL using yt-dlp
+async function extractAudioUrl(videoUrl: string): Promise<{ audioUrl: string; title: string; duration: number } | null> {
+  try {
+    console.log(`[KB] Extracting audio URL from: ${videoUrl}`);
+    // Use yt-dlp to get the direct audio stream URL without downloading
+    const { stdout, stderr } = await execAsync(
+      `yt-dlp --no-download --print "%(title)s|||%(duration)s|||%(url)s" -f "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio" --no-playlist "${videoUrl.replace(/"/g, '\\"')}"`,
+      { timeout: 60000 }
+    );
+    
+    if (stderr) {
+      console.log(`[KB] yt-dlp stderr: ${stderr.substring(0, 200)}`);
+    }
+    
+    const output = stdout.trim();
+    if (!output) {
+      console.error("[KB] yt-dlp returned empty output");
+      return null;
+    }
+    
+    const parts = output.split("|||");
+    if (parts.length < 3) {
+      console.error("[KB] yt-dlp output format unexpected:", output.substring(0, 200));
+      return null;
+    }
+    
+    const title = parts[0] || "Unknown";
+    const duration = parseFloat(parts[1]) || 0;
+    const audioUrl = parts[2] || "";
+    
+    if (!audioUrl.startsWith("http")) {
+      console.error("[KB] Invalid audio URL from yt-dlp");
+      return null;
+    }
+    
+    console.log(`[KB] Got audio URL for "${title}" (${Math.round(duration)}s)`);
+    return { audioUrl, title, duration };
+  } catch (error) {
+    console.error("[KB] yt-dlp extraction failed:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+// Transcribe video audio using Whisper API
+async function transcribeVideoContent(audioUrl: string, title: string): Promise<string> {
+  try {
+    console.log(`[KB] Transcribing audio for: ${title}`);
+    
+    const result = await transcribeAudio({
+      audioUrl,
+      language: "en",
+      prompt: `Transcribe this video about sales, marketing, or business. The video is titled: "${title}". Capture everything said accurately.`,
+    });
+    
+    // Check if it's an error response
+    if ("error" in result) {
+      console.error(`[KB] Transcription error: ${result.error} - ${result.details || ""}`);
+      
+      // If file too large, try to download and split
+      if (result.code === "FILE_TOO_LARGE") {
+        console.log("[KB] Audio file too large for direct transcription, attempting download and split...");
+        return await transcribeLargeVideo(audioUrl, title);
+      }
+      
+      return "";
+    }
+    
+    console.log(`[KB] Transcription complete: ${result.text.length} chars, language: ${result.language}`);
+    return result.text;
+  } catch (error) {
+    console.error("[KB] Transcription failed:", error);
+    return "";
+  }
+}
+
+// Handle large videos by downloading audio, splitting into chunks, and transcribing each
+async function transcribeLargeVideo(audioUrl: string, title: string): Promise<string> {
+  try {
+    const tmpDir = `/tmp/kb-audio-${Date.now()}`;
+    await execAsync(`mkdir -p ${tmpDir}`);
+    
+    // Download audio to temp file
+    console.log("[KB] Downloading audio for splitting...");
+    await execAsync(
+      `curl -L -o ${tmpDir}/audio.m4a "${audioUrl.replace(/"/g, '\\"')}"`,
+      { timeout: 120000 }
+    );
+    
+    // Check file size
+    const { stdout: sizeOut } = await execAsync(`stat -c%s ${tmpDir}/audio.m4a`);
+    const fileSizeMB = parseInt(sizeOut.trim()) / (1024 * 1024);
+    console.log(`[KB] Downloaded audio: ${fileSizeMB.toFixed(1)}MB`);
+    
+    // Split into 14MB chunks (under 16MB limit)
+    const chunkDuration = Math.floor(14 / fileSizeMB * 100) * 10; // rough estimate of seconds per chunk
+    const segmentTime = Math.max(300, Math.min(chunkDuration, 900)); // 5-15 min chunks
+    
+    // Check if ffmpeg is available, if not install it
+    try {
+      await execAsync("which ffmpeg");
+    } catch {
+      console.log("[KB] Installing ffmpeg...");
+      await execAsync("sudo apt-get install -y ffmpeg 2>/dev/null || true", { timeout: 60000 });
+    }
+    
+    await execAsync(
+      `ffmpeg -i ${tmpDir}/audio.m4a -f segment -segment_time ${segmentTime} -c copy ${tmpDir}/chunk_%03d.m4a 2>/dev/null || true`,
+      { timeout: 120000 }
+    );
+    
+    // Get list of chunks
+    const { stdout: chunkList } = await execAsync(`ls ${tmpDir}/chunk_*.m4a 2>/dev/null || echo ""`);
+    const chunks = chunkList.trim().split("\n").filter(Boolean);
+    
+    if (chunks.length === 0) {
+      // Fallback: try to transcribe the first part only
+      console.log("[KB] Splitting failed, trying first 14MB only");
+      await execAsync(`head -c 14680064 ${tmpDir}/audio.m4a > ${tmpDir}/first_part.m4a`);
+      const { url: partUrl } = await storagePut(
+        `kb-audio/${nanoid()}-part.m4a`,
+        Buffer.from(await (await fetch(`file://${tmpDir}/first_part.m4a`)).arrayBuffer()),
+        "audio/mp4"
+      );
+      const partTranscript = await transcribeVideoContent(partUrl, title);
+      await execAsync(`rm -rf ${tmpDir}`);
+      return partTranscript;
+    }
+    
+    console.log(`[KB] Split into ${chunks.length} chunks, transcribing each...`);
+    
+    let fullTranscript = "";
+    for (let i = 0; i < chunks.length && i < 10; i++) { // Max 10 chunks
+      const chunkPath = chunks[i];
+      const chunkBuffer = await (await import("fs")).promises.readFile(chunkPath);
+      
+      // Upload chunk to S3 for transcription
+      const { url: chunkUrl } = await storagePut(
+        `kb-audio/${nanoid()}-chunk${i}.m4a`,
+        chunkBuffer,
+        "audio/mp4"
+      );
+      
+      const chunkResult = await transcribeAudio({
+        audioUrl: chunkUrl,
+        language: "en",
+        prompt: `Continue transcribing this video about sales/business. Title: "${title}". Part ${i + 1} of ${chunks.length}.`,
+      });
+      
+      if (!("error" in chunkResult)) {
+        fullTranscript += chunkResult.text + " ";
+        console.log(`[KB] Chunk ${i + 1}/${chunks.length} transcribed: ${chunkResult.text.length} chars`);
+      } else {
+        console.error(`[KB] Chunk ${i + 1} failed: ${chunkResult.error}`);
+      }
+    }
+    
+    // Cleanup
+    await execAsync(`rm -rf ${tmpDir}`);
+    
+    return fullTranscript.trim();
+  } catch (error) {
+    console.error("[KB] Large video transcription failed:", error);
+    return "";
+  }
+}
+
 // ============ URL CONTENT FETCHING ============
-// Fetch actual content from URLs using Data APIs and web scraping
+// Fetch actual content from URLs - prioritizes video transcription over metadata
 async function fetchUrlContent(url: string, platform: string): Promise<string> {
   try {
-    if (platform === "youtube") {
-      return await fetchYouTubeContent(url);
+    // For video platforms, try to transcribe the actual video content
+    if (platform === "youtube" || platform === "instagram" || platform === "tiktok") {
+      return await fetchVideoContent(url, platform);
     }
     // For other platforms, try to fetch the page content directly
     return await fetchWebPageContent(url);
@@ -203,6 +379,48 @@ async function fetchUrlContent(url: string, platform: string): Promise<string> {
     console.error(`[KB] Error fetching content from ${platform}:`, error);
     return "";
   }
+}
+
+// Fetch and transcribe video content from any video platform
+async function fetchVideoContent(url: string, platform: string): Promise<string> {
+  let content = "";
+  
+  // Step 1: Try to extract audio and transcribe the video
+  console.log(`[KB] Attempting to transcribe ${platform} video: ${url}`);
+  const audioInfo = await extractAudioUrl(url);
+  
+  if (audioInfo) {
+    const { audioUrl, title, duration } = audioInfo;
+    content += `VIDEO TITLE: ${title}\n`;
+    content += `DURATION: ${Math.round(duration / 60)} minutes\n\n`;
+    
+    // Transcribe the video audio
+    const transcript = await transcribeVideoContent(audioUrl, title);
+    
+    if (transcript && transcript.length > 50) {
+      content += `=== FULL VIDEO TRANSCRIPTION (Everything said in the video) ===\n\n`;
+      content += transcript;
+      content += `\n\n=== END OF TRANSCRIPTION ===\n`;
+      console.log(`[KB] Successfully transcribed ${platform} video: ${transcript.length} chars`);
+      return content;
+    } else {
+      console.log(`[KB] Transcription was too short or empty, falling back to metadata`);
+    }
+  } else {
+    console.log(`[KB] Could not extract audio from ${platform} video, falling back to metadata`);
+  }
+  
+  // Step 2: Fallback - get metadata if transcription failed
+  if (platform === "youtube") {
+    content += await fetchYouTubeMetadata(url);
+  }
+  
+  // Add note about fallback
+  if (content) {
+    content = `NOTE: Could not transcribe the video audio. Below is metadata only:\n\n` + content;
+  }
+  
+  return content;
 }
 
 // Extract YouTube video ID from URL
@@ -234,14 +452,14 @@ function extractYouTubeChannelId(url: string): string | null {
   return null;
 }
 
-async function fetchYouTubeContent(url: string): Promise<string> {
+// Fetch YouTube metadata only (title, description, channel info) - used as fallback
+async function fetchYouTubeMetadata(url: string): Promise<string> {
   let content = "";
   
   const videoId = extractYouTubeVideoId(url);
   const channelId = extractYouTubeChannelId(url);
   
   if (videoId) {
-    // For individual videos, search for the video to get its details
     try {
       const searchResult = await callDataApi("Youtube/search", {
         query: { q: videoId, hl: "en", gl: "US" },
@@ -254,19 +472,17 @@ async function fetchYouTubeContent(url: string): Promise<string> {
             content += `VIDEO TITLE: ${video.title || "Unknown"}\n`;
             content += `CHANNEL: ${video.channelTitle || "Unknown"}\n`;
             content += `VIEWS: ${video.viewCountText || "Unknown"}\n`;
-            content += `PUBLISHED: ${video.publishedTimeText || "Unknown"}\n`;
             content += `DESCRIPTION: ${video.descriptionSnippet || "No description"}\n\n`;
             break;
           }
         }
       }
     } catch (err) {
-      console.error("[KB] YouTube search failed:", err);
+      console.error("[KB] YouTube metadata fetch failed:", err);
     }
   }
   
   if (channelId || url.includes("youtube.com/@") || url.includes("youtube.com/c/")) {
-    // For channels, get channel details and recent videos
     const channelQuery = channelId || url;
     try {
       const channelDetails = await callDataApi("Youtube/get_channel_details", {
@@ -276,59 +492,10 @@ async function fetchYouTubeContent(url: string): Promise<string> {
       if (channelDetails) {
         content += `CHANNEL NAME: ${channelDetails.title || "Unknown"}\n`;
         content += `CHANNEL DESCRIPTION: ${channelDetails.description || "No description"}\n`;
-        content += `SUBSCRIBERS: ${channelDetails.stats?.subscribersText || "Unknown"}\n`;
-        content += `TOTAL VIDEOS: ${channelDetails.stats?.videos || "Unknown"}\n`;
-        content += `COUNTRY: ${channelDetails.country || "Unknown"}\n`;
-        
-        if (channelDetails.keywords?.length) {
-          content += `KEYWORDS: ${channelDetails.keywords.join(", ")}\n`;
-        }
-        content += "\n";
+        content += `SUBSCRIBERS: ${channelDetails.stats?.subscribersText || "Unknown"}\n\n`;
       }
     } catch (err) {
       console.error("[KB] YouTube channel details failed:", err);
-    }
-    
-    // Get recent videos from channel
-    try {
-      const actualChannelId = channelId?.startsWith("UC") ? channelId : channelQuery;
-      const channelVideos = await callDataApi("Youtube/get_channel_videos", {
-        query: { id: actualChannelId, filter: "videos_latest", hl: "en", gl: "US" },
-      }) as any;
-      
-      if (channelVideos?.contents) {
-        content += "RECENT VIDEOS:\n";
-        for (const item of channelVideos.contents.slice(0, 10)) {
-          if (item?.type === "video" && item?.video) {
-            const video = item.video;
-            content += `- ${video.title || "Untitled"} (${video.stats?.views || 0} views, ${video.publishedTimeText || ""})\n`;
-          }
-        }
-        content += "\n";
-      }
-    } catch (err) {
-      console.error("[KB] YouTube channel videos failed:", err);
-    }
-  }
-  
-  // If we got a video URL but no channel info, also try to get channel context
-  if (videoId && !channelId) {
-    try {
-      // Search for the video title to get more context
-      const searchResult = await callDataApi("Youtube/search", {
-        query: { q: url, hl: "en", gl: "US" },
-      }) as any;
-      
-      if (searchResult?.contents) {
-        content += "RELATED CONTENT:\n";
-        for (const item of searchResult.contents.slice(0, 5)) {
-          if (item?.type === "video" && item?.video) {
-            content += `- ${item.video.title || "Untitled"}: ${item.video.descriptionSnippet || ""}\n`;
-          }
-        }
-      }
-    } catch (err) {
-      // Non-critical, ignore
     }
   }
   
@@ -351,21 +518,14 @@ async function fetchWebPageContent(url: string): Promise<string> {
     
     // Basic HTML to text extraction
     let text = html
-      // Remove scripts and styles
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      // Extract meta description
       .replace(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/gi, "META DESCRIPTION: $1\n")
       .replace(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["'][^>]*>/gi, "META DESCRIPTION: $1\n")
-      // Extract title
       .replace(/<title[^>]*>([^<]*)<\/title>/gi, "PAGE TITLE: $1\n")
-      // Extract headings
       .replace(/<h[1-6][^>]*>([^<]*)<\/h[1-6]>/gi, "\nHEADING: $1\n")
-      // Extract paragraphs
       .replace(/<p[^>]*>/gi, "\n")
-      // Remove remaining HTML tags
       .replace(/<[^>]+>/g, " ")
-      // Clean up whitespace
       .replace(/&nbsp;/g, " ")
       .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
@@ -374,7 +534,6 @@ async function fetchWebPageContent(url: string): Promise<string> {
       .replace(/\s+/g, " ")
       .trim();
     
-    // Limit to first 10000 chars
     return text.substring(0, 10000);
   } catch (error) {
     console.error("[KB] Web page fetch failed:", error);
@@ -1669,21 +1828,30 @@ Return ONLY the refined message, ready to send.`;
           if (item.type === "url") {
             const platform = item.platform || detectPlatform(item.sourceUrl);
             
-            // Fetch actual content from the URL using Data APIs
+            // Fetch actual content - for videos this transcribes the full audio
             let fetchedContent = "";
             try {
+              await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 12 });
+              console.log(`[KB] Starting content extraction for ${platform} URL: ${item.sourceUrl}`);
               fetchedContent = await fetchUrlContent(item.sourceUrl, platform);
+              console.log(`[KB] Content extracted: ${fetchedContent.length} chars`);
             } catch (fetchErr) {
               console.error(`[KB] Failed to fetch content from ${platform}:`, fetchErr);
             }
 
-            await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 25 });
+            await db.updateKnowledgeBaseItem(input.id, ctx.user.id, { processingProgress: 30 });
+
+            // Determine if we got a real transcription or just metadata
+            const hasTranscription = fetchedContent.includes("FULL VIDEO TRANSCRIPTION");
+            const systemPrompt = hasTranscription
+              ? `You are a sales training content analyzer. You have been given the FULL TRANSCRIPTION of a ${platform} video - this is everything the speaker said word for word. Analyze it thoroughly and extract EVERY piece of knowledge, technique, strategy, and insight that could help someone become better at sales conversations. This is the actual spoken content from the video.`
+              : `You are a sales training content analyzer. You have been given content extracted from a ${platform} URL. Analyze it thoroughly and extract EVERYTHING that could help someone become better at sales conversations.`;
 
             const extractResponse = await callLLMWithRetry({
               messages: [
                 { 
                   role: "system", 
-                  content: `You are a sales training content analyzer. You have been given the actual content extracted from a ${platform} URL. Analyze it thoroughly and extract EVERYTHING that could help someone become better at sales conversations.` 
+                  content: systemPrompt
                 },
                 { 
                   role: "user", 
@@ -1691,7 +1859,7 @@ Return ONLY the refined message, ready to send.`;
 Title: ${item.title}
 URL: ${item.sourceUrl}
 
-${fetchedContent ? `ACTUAL CONTENT EXTRACTED FROM THE URL:\n${fetchedContent.substring(0, 15000)}\n\n` : "NOTE: Could not fetch content from this URL directly. Analyze based on the title and URL context.\n\n"}Extract ALL learnings including:
+${fetchedContent ? `CONTENT FROM THE VIDEO/URL:\n${fetchedContent.substring(0, 30000)}\n\n` : "NOTE: Could not fetch content from this URL directly. Analyze based on the title and URL context.\n\n"}Extract ALL learnings including:
 - Sales techniques and methodologies (step by step)
 - Specific phrases, scripts, and word choices to use
 - Objection handling approaches with examples
@@ -1704,8 +1872,10 @@ ${fetchedContent ? `ACTUAL CONTENT EXTRACTED FROM THE URL:\n${fetchedContent.sub
 - Opening lines and first message strategies
 - Pain discovery questions
 - Story frameworks
+- Key quotes and exact phrases the speaker used
+- Real examples and case studies mentioned
 
-Be as detailed as possible. Include specific examples and scripts.` 
+Be as detailed as possible. Include specific examples, scripts, and exact quotes from the content.` 
                 },
               ],
             });

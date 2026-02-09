@@ -277,3 +277,14 @@
 - [x] Fix: Chat messages query failing with database error - added missing threadType column to database
 - [x] Fix: Screenshot upload file input not resetting after upload
 - [x] Fix: Knowledge base not analyzing YouTube/Instagram video content properly - integrated YouTube Data API (search, channel details, channel videos) for actual content extraction, added web page scraping for other URLs
+
+## Video Content Deep Learning Fix (v13)
+- [x] Fix: YouTube URLs only fetching title/description instead of actual video content
+- [x] Fix: Instagram URLs only fetching metadata instead of actual video content
+- [x] Implement video audio transcription using Whisper API for YouTube videos
+- [x] Implement video audio transcription for Instagram/TikTok videos via yt-dlp
+- [x] AI should learn everything said in the video (full transcription)
+- [x] Process transcribed content through knowledge chunking for deep learning
+- [x] Remove reliance on just title/description metadata
+- [x] Handle large videos by splitting audio into chunks for transcription
+- [x] Fallback to metadata when transcription is unavailable
