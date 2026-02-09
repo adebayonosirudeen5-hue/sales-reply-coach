@@ -1,7 +1,10 @@
+import { Resend } from "resend";
 import { ENV } from "./env";
 
+const resend = new Resend(ENV.RESEND_API_KEY);
+
 /**
- * Send verification code email with professional template
+ * Send verification code email with professional template using Resend
  */
 export async function sendVerificationEmail(email: string, code: string): Promise<boolean> {
   try {
@@ -59,7 +62,7 @@ export async function sendVerificationEmail(email: string, code: string): Promis
           <tr>
             <td style="background-color: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
               <p style="margin: 0 0 10px 0; color: #718096; font-size: 14px;">
-                Need help? Contact us at support@salesreplycoach.com
+                Need help? Reply to this email for support.
               </p>
               <p style="margin: 0; color: #a0aec0; font-size: 12px;">
                 © 2026 Sales Reply Coach. All rights reserved.
@@ -74,38 +77,20 @@ export async function sendVerificationEmail(email: string, code: string): Promis
 </html>
     `;
 
-    // TEMPORARY: Log verification code to console for testing
-    // TODO: Set up proper email service (SendGrid, Resend, etc.)
-    console.log("\n" + "=".repeat(60));
-    console.log("VERIFICATION CODE FOR:", email);
-    console.log("CODE:", code);
-    console.log("=".repeat(60) + "\n");
-    
-    // Try to send email via Manus notification API
-    try {
-      const response = await fetch(`${ENV.forgeApiUrl}/notification/send`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${ENV.forgeApiKey}`,
-        },
-        body: JSON.stringify({
-          to: email,
-          subject: "Verify Your Email - Sales Reply Coach",
-          html: emailHtml,
-        }),
-      });
+    // Send email via Resend
+    const { data, error } = await resend.emails.send({
+      from: "Sales Reply Coach <onboarding@resend.dev>",
+      to: [email],
+      subject: "Verify Your Email - Sales Reply Coach",
+      html: emailHtml,
+    });
 
-      if (response.ok) {
-        console.log("✓ Verification email sent successfully to", email);
-      } else {
-        console.warn("⚠ Email API not available, code logged to console instead");
-      }
-    } catch (error) {
-      console.warn("⚠ Email sending failed, code logged to console instead");
+    if (error) {
+      console.error("Resend API error:", error);
+      return false;
     }
 
-    // Always return true since code is logged to console
+    console.log("✓ Verification email sent successfully to", email, "| Email ID:", data?.id);
     return true;
   } catch (error) {
     console.error("Error sending verification email:", error);

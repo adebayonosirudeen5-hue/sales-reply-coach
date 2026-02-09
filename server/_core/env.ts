@@ -9,4 +9,5 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   SUPABASE_URL: process.env.SUPABASE_URL ?? "",
   SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY ?? "",
+  RESEND_API_KEY: process.env.RESEND_API_KEY ?? "",
 };

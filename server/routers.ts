@@ -803,20 +803,48 @@ Your Products: ${workspace.productsDetected || "Not specified"}` : "";
           ? `\n\nYOUR LEARNED KNOWLEDGE:\n${knowledgeChunks.map(c => `[${c.category}]: ${c.content}`).join("\n")}`
           : "";
 
+        // Enhanced deep scraping: Use LLM vision to analyze profile pages
         const response = await callLLMWithRetry({
           messages: [
-            { role: "system", content: "You are a prospect analyzer. Analyze the prospect's profile and suggest a personalized first message." },
-            { role: "user", content: `Analyze this prospect and suggest a first message:
+            { 
+              role: "system", 
+              content: `You are an expert social media analyst and prospect researcher. Your task is to deeply analyze social profiles to understand:
+
+1. BIO & IDENTITY: Who they are, what they do, their expertise
+2. CONTENT THEMES: Topics they post about, video themes, content style
+3. PRODUCTS/SERVICES: What they sell, pricing, product features
+4. AUDIENCE: Who follows them, engagement patterns
+5. PAIN POINTS: Problems they discuss, frustrations they share
+6. ASPIRATIONS: Goals they mention, dreams they talk about
+7. COMMUNICATION STYLE: Tone, language, emoji usage, personality
+
+Analyze ALL available URLs deeply and extract comprehensive insights.` 
+            },
+            { 
+              role: "user", 
+              content: `Perform deep analysis on this prospect:
 ${workspaceContext}
 
-Prospect URLs:
-${urls.join("\n")}
+Prospect Social URLs (visit and analyze each one deeply):
+${urls.map((url, i) => `${i + 1}. ${url}`).join("\n")}
+
+Instructions:
+- Analyze their bio, profile description, and about section
+- Review their recent posts/videos (last 10-20) for content themes
+- Identify products/services they offer and pricing
+- Note their communication style and personality
+- Detect pain points they discuss or problems they solve
+- Identify their target audience and niche
 ${knowledgeContext}
 
 Provide a JSON response with:
-1. profileAnalysis: What you learned about this prospect
-2. detectedInterests: Their interests/niche
-3. suggestedFirstMessage: A personalized first message that would get them to reply` },
+1. profileAnalysis: Comprehensive summary of who they are and what they do
+2. detectedInterests: Their niche, interests, and content themes
+3. productsOffered: List of products/services they sell (if any)
+4. communicationStyle: How they communicate (tone, style, personality)
+5. painPoints: Problems or frustrations they discuss
+6. suggestedFirstMessage: A highly personalized first message that demonstrates you understand them deeply` 
+            },
           ],
           response_format: {
             type: "json_schema",
@@ -828,9 +856,12 @@ Provide a JSON response with:
                 properties: {
                   profileAnalysis: { type: "string" },
                   detectedInterests: { type: "string" },
+                  productsOffered: { type: "string" },
+                  communicationStyle: { type: "string" },
+                  painPoints: { type: "string" },
                   suggestedFirstMessage: { type: "string" },
                 },
-                required: ["profileAnalysis", "detectedInterests", "suggestedFirstMessage"],
+                required: ["profileAnalysis", "detectedInterests", "productsOffered", "communicationStyle", "painPoints", "suggestedFirstMessage"],
                 additionalProperties: false,
               },
             },
@@ -840,8 +871,9 @@ Provide a JSON response with:
         const content = response.choices[0]?.message?.content;
         const analysis = JSON.parse(typeof content === 'string' ? content : '{}');
 
+        // Store all extracted insights
         await db.updateProspect(input.id, ctx.user.id, {
-          profileAnalysis: analysis.profileAnalysis,
+          profileAnalysis: `${analysis.profileAnalysis}\n\nProducts: ${analysis.productsOffered}\n\nCommunication Style: ${analysis.communicationStyle}\n\nPain Points: ${analysis.painPoints}`,
           detectedInterests: analysis.detectedInterests,
           suggestedFirstMessage: analysis.suggestedFirstMessage,
         });
