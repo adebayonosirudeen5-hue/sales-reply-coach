@@ -445,17 +445,31 @@ export const appRouter = router({
           throw new Error("Verification code expired");
         }
         
-        // Create Supabase account
-        const { signUpWithEmail } = await import("../client/src/lib/supabase");
-        try {
-          await signUpWithEmail({
-            email: verification.email,
-            password: verification.password,
-            name: verification.name,
-          });
-        } catch (error: any) {
-          throw new Error(`Failed to create account: ${error.message}`);
+        // Create Supabase account using Admin API (bypasses email confirmation)
+        const { createClient } = await import("@supabase/supabase-js");
+        const supabase = createClient(
+          ENV.SUPABASE_URL,
+          ENV.SUPABASE_SERVICE_KEY,
+          { auth: { autoRefreshToken: false, persistSession: false } }
+        );
+        
+        const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+          email: verification.email,
+          password: verification.password,
+          email_confirm: true, // Auto-confirm email
+          user_metadata: { name: verification.name },
+        });
+        
+        if (authError || !authData.user) {
+          throw new Error(`Failed to create account: ${authError?.message || "Unknown error"}`);
         }
+        
+        // Create user in our database
+        await db.upsertUser({
+          openId: authData.user.id,
+          name: verification.name,
+          email: verification.email,
+        });
         
         // Mark as verified
         await database
@@ -641,7 +655,8 @@ Provide a JSON response with:
         storeUrl: z.string().optional(),
         otherUrl: z.string().optional(),
         importedConversation: z.string().optional(),
-        isReEngagement: z.boolean().optional(),
+        conversationScreenshot: z.string().optional(),
+        isExistingConversation: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const id = await db.createProspect({
@@ -652,17 +667,51 @@ Provide a JSON response with:
           storeUrl: input.storeUrl,
           otherUrl: input.otherUrl,
           userId: ctx.user.id,
-          conversationStage: input.isReEngagement ? "warm_rapport" : "first_contact",
+          conversationStage: input.isExistingConversation ? "warm_rapport" : "first_contact",
         });
 
-        // If conversation was imported, analyze it and create initial message
-        if (input.importedConversation) {
+        // Handle conversation screenshot if provided
+        let conversationText = input.importedConversation || "";
+        if (input.conversationScreenshot) {
+          // Extract text from screenshot using vision API
+          try {
+            const visionResponse = await callLLMWithRetry({
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: "Extract all text from this conversation screenshot. Format it as a conversation with clear speaker labels."
+                    },
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: input.conversationScreenshot,
+                        detail: "high"
+                      }
+                    }
+                  ]
+                }
+              ]
+            });
+            const extractedText = visionResponse.choices[0]?.message?.content;
+            if (typeof extractedText === 'string' && extractedText) {
+              conversationText = extractedText;
+            }
+          } catch (error) {
+            console.error("Failed to extract text from screenshot:", error);
+          }
+        }
+
+        // If conversation was imported or screenshot provided, analyze it and create initial message
+        if (conversationText) {
           // Store the imported conversation as the first message
           await db.createChatMessage({
             prospectId: id,
             userId: ctx.user.id,
             direction: "inbound",
-            content: `[IMPORTED CONVERSATION]\n${input.importedConversation}`,
+            content: `[IMPORTED CONVERSATION]\n${conversationText}`,
           });
 
           // Get workspace context
@@ -697,7 +746,7 @@ LEARNED KNOWLEDGE:
 ${knowledgeChunks.map(c => c.content).join("\n")}
 
 IMPORTED CONVERSATION:
-${input.importedConversation}
+${conversationText}
 
 Provide 2-3 re-engagement message suggestions in JSON format:
 {"suggestions": [{"type": "casual", "text": "...", "why": "..."}, ...], "analysis": {"lastTopic": "...", "prospectInterest": "...", "bestApproach": "..."}}` }

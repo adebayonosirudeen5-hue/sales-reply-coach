@@ -236,3 +236,21 @@
 - [x] Add code expiration (10 minutes)
 - [x] Add resend code functionality
 - [x] Design professional email template with branding
+
+
+## Verification Code Signup Bug Fixes (v9.1)
+- [ ] Remove Supabase signUpWithEmail call from backend verifyCode endpoint
+- [ ] Fix signup UI to show code input step after sending code (currently redirects to login)
+- [ ] Ensure verification code email is sent (not Supabase confirmation link)
+- [ ] Create Supabase account only after code verification
+- [ ] Test complete signup flow: enter details → receive code → enter code → account created
+
+
+## Chat Analysis Bug Fixes (v10)
+- [x] Fix database query error: "Failed query: select from chat_messages"
+- [x] Fix first message suggestion not appearing after profile analysis
+- [x] Add "New Person" vs "Existing Conversation" option when adding chat
+- [ ] For new person: Analyze social profile, bio, videos, store, products
+- [x] For existing conversation: Add screenshot upload for conversation history
+- [x] AI should understand conversation context from uploaded screenshots
+- [ ] Display first message suggestion prominently after analysis

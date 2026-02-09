@@ -31,7 +31,9 @@ export default function Chats() {
   const [newProspectTiktok, setNewProspectTiktok] = useState("");
   const [newProspectStore, setNewProspectStore] = useState("");
   const [importConversation, setImportConversation] = useState("");
-  const [isReEngagement, setIsReEngagement] = useState(false);
+  const [conversationType, setConversationType] = useState<"new" | "existing">("new");
+  const [conversationScreenshot, setConversationScreenshot] = useState<string | null>(null);
+  const conversationFileInputRef = useRef<HTMLInputElement>(null);
   
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState<"text" | "screenshot">("text");
@@ -65,14 +67,15 @@ export default function Chats() {
 
   const createProspect = trpc.prospect.create.useMutation({
     onSuccess: (data) => {
-      toast.success(isReEngagement ? "Re-engagement chat created!" : "New chat created!");
+      toast.success(conversationType === "existing" ? "Chat with history created!" : "New chat created!");
       setNewProspectOpen(false);
       setNewProspectName("");
       setNewProspectIg("");
       setNewProspectTiktok("");
       setNewProspectStore("");
       setImportConversation("");
-      setIsReEngagement(false);
+      setConversationType("new");
+      setConversationScreenshot(null);
       refetchProspects();
       setLocation(`/chats/${data.id}`);
     },
@@ -208,7 +211,8 @@ export default function Chats() {
       tiktokUrl: newProspectTiktok || undefined,
       storeUrl: newProspectStore || undefined,
       importedConversation: importConversation || undefined,
-      isReEngagement: isReEngagement,
+      conversationScreenshot: conversationScreenshot || undefined,
+      isExistingConversation: conversationType === "existing",
     });
   };
 
@@ -285,39 +289,88 @@ export default function Chats() {
                     />
                   </div>
                   
-                  {/* Import Conversation Section */}
+                  {/* Conversation Type Selection */}
                   <div className="pt-4 border-t">
-                    <div className="flex items-center gap-2 mb-2">
-                      <input
-                        type="checkbox"
-                        id="isReEngagement"
-                        checked={isReEngagement}
-                        onChange={(e) => setIsReEngagement(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                      <Label htmlFor="isReEngagement" className="flex items-center gap-2 cursor-pointer">
-                        <RefreshCw className="h-4 w-4 text-orange-500" />
-                        Re-engagement (they saw but didn't reply)
-                      </Label>
+                    <Label className="mb-3 block">Is this a new person or existing conversation?</Label>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          id="typeNew"
+                          name="conversationType"
+                          checked={conversationType === "new"}
+                          onChange={() => setConversationType("new")}
+                          className="h-4 w-4"
+                        />
+                        <Label htmlFor="typeNew" className="cursor-pointer font-normal">
+                          New Person - I've never chatted with them before
+                        </Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          id="typeExisting"
+                          name="conversationType"
+                          checked={conversationType === "existing"}
+                          onChange={() => setConversationType("existing")}
+                          className="h-4 w-4"
+                        />
+                        <Label htmlFor="typeExisting" className="cursor-pointer font-normal">
+                          Existing Conversation - We've already been chatting
+                        </Label>
+                      </div>
                     </div>
-                    <div>
-                      <Label>Import Previous Conversation (optional)</Label>
-                      <Textarea
-                        value={importConversation}
-                        onChange={(e) => setImportConversation(e.target.value)}
-                        placeholder="Paste your previous conversation here so the AI understands the context and can suggest a re-engagement message..."
-                        rows={4}
-                        className="mt-1"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Paste the full conversation so the AI knows where you left off
-                      </p>
-                    </div>
+                    
+                    {conversationType === "existing" && (
+                      <div className="mt-4 space-y-3">
+                        <div>
+                          <Label>Upload Conversation Screenshot</Label>
+                          <input
+                            ref={conversationFileInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                setConversationScreenshot(reader.result as string);
+                                toast.success("Screenshot uploaded!");
+                              };
+                              reader.readAsDataURL(file);
+                            }}
+                            className="hidden"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => conversationFileInputRef.current?.click()}
+                            className="w-full mt-1"
+                          >
+                            <Upload className="h-4 w-4 mr-2" />
+                            {conversationScreenshot ? "Screenshot Uploaded ✓" : "Upload Screenshot"}
+                          </Button>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Upload a screenshot of your full conversation history
+                          </p>
+                        </div>
+                        <div>
+                          <Label>Or Paste Conversation Text</Label>
+                          <Textarea
+                            value={importConversation}
+                            onChange={(e) => setImportConversation(e.target.value)}
+                            placeholder="Paste your previous conversation here..."
+                            rows={4}
+                            className="mt-1"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <DialogFooter>
                   <Button onClick={handleCreateProspect} disabled={!newProspectName.trim()}>
-                    {isReEngagement ? "Create Re-engagement Chat" : "Create Chat"}
+                    {conversationType === "existing" ? "Create Chat with History" : "Analyze & Create Chat"}
                   </Button>
                 </DialogFooter>
               </DialogContent>
